@@ -20,6 +20,9 @@ const LEVEL_COLOR = { CRITICAL: C.red + C.bold, HIGH: C.red, MEDIUM: C.yellow, L
 const color = (lvl, s) => `${LEVEL_COLOR[lvl] || ""}${s}${C.reset}`;
 
 const cfg = loadConfig();
+
+// A long-running radar must survive transient network errors instead of exiting.
+process.on("unhandledRejection", (e) => console.error(`${C.dim}[warn] ${e?.message || e}${C.reset}`));
 const [cmd = "help", ...args] = process.argv.slice(2);
 
 async function check(mint, json) {
@@ -34,6 +37,7 @@ async function check(mint, json) {
   const md = report.metadata || {};
   console.log(`\n${C.bold}${md.symbol || "?"}${C.reset} ${md.name ? `(${md.name})` : ""}  ${C.dim}${mint}${C.reset}`);
   console.log(`${color(risk.level, `${risk.level}  ${risk.score}/100`)}   ${C.dim}${report.token.program}, ${report.ms} ms via ${cfg.usingSolami ? "Solami RPC" : "public RPC"}${C.reset}\n`);
+  if (risk.category === "protocol") console.log(`  ${C.cyan}PROTOCOL TOKEN${C.reset} ${C.dim}(powers held by program addresses, not wallets)${C.reset}`);
   for (const f of risk.flags) console.log(`  ${C.red}✗${C.reset} ${f.text} ${C.dim}(+${f.points})${C.reset}`);
   for (const p of risk.positives) console.log(`  ${C.green}✓${C.reset} ${p}`);
   for (const n of risk.notes || []) console.log(`  ${C.cyan}i${C.reset} ${n}`);
@@ -65,7 +69,8 @@ function watch() {
   radar.on("update", (v) => {
     if (v.status !== "done") return;
     const top = v.flags[0]?.text || v.positives[0] || "";
-    console.log(`${color(v.level, v.level.padEnd(8))} ${String(v.score).padStart(3)}  ${(v.symbol || "?").slice(0, 12).padEnd(12)} ${C.dim}${v.mint}${C.reset}  ${top.slice(0, 90)}`);
+    const tag = v.category === "protocol" ? `${C.cyan}[protocol]${C.reset} ` : "";
+    console.log(`${color(v.level, v.level.padEnd(8))} ${String(v.score).padStart(3)}  ${(v.symbol || "?").slice(0, 12).padEnd(12)} ${C.dim}${v.mint}${C.reset}  ${tag}${top.slice(0, 90)}`);
   });
   radar.on("alert", (v) => alerts.send(v));
 

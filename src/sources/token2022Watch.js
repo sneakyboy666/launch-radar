@@ -65,7 +65,9 @@ export class Token2022TrapWatch extends EventEmitter {
         this.emit("launch", { mint, name: "", symbol: "", creator, source: `token-2022: ${extensions.join(", ")}`, signature, slot, seenAt: Date.now() });
       }
     } catch (e) {
-      this.emit("error", e);
+      // Never emit "error": an EventEmitter with no listener would crash the process.
+      this.stats.lookupErrors = (this.stats.lookupErrors || 0) + 1;
+      this.emit("warning", { source: "token2022-traps", message: e.message, signature });
     }
   }
 

@@ -27,6 +27,9 @@ const BRANDS = ["USDC", "USDT", "PYUSD", "JITOSOL", "MSOL", "BSOL", "JUPSOL", "E
 const HOMOGLYPH = /[\u0400-\u04FF\u0370-\u03FF]/;
 const LATIN = /[A-Za-z]/;
 
+// Powers held by a program address count for less than powers held by a personal wallet.
+const PROGRAM_DISCOUNT = 0.4;
+
 const LEVELS = [
   [70, "CRITICAL"],
   [45, "HIGH"],
@@ -34,7 +37,7 @@ const LEVELS = [
   [0, "LOW"],
 ];
 
-export function scoreReport(r) {
+export function scoreReport(r, ctx = {}) {
   const flags = [];
   const positives = [];
   const add = (points, id, text) => flags.push({ id, points, text });
@@ -103,17 +106,53 @@ export function scoreReport(r) {
     add(15, "brand_copy", `Name/symbol contains "${brand}" but this is not an official ${brand} token.`);
   }
 
+  // --- behaviour seen by the radar itself (only available in live mode)
+  if (ctx.creatorLaunches >= 3) add(25, "serial_launcher", `Creator wallet launched ${ctx.creatorLaunches} tokens in the last hour (serial launcher).`);
+  if (ctx.sameNameLaunches >= 2) add(10, "copycat", `${ctx.sameNameLaunches} other tokens with this name/symbol launched in the last hour (copycat wave).`);
+
+  // --- who holds the powers: a personal wallet can act any time; a program address (PDA)
+  // can only act by that program's rules (prediction-market shares, vault/LP tokens...).
+  const notes = [];
+  const holderOf = r.authorities || {};
+  const ctl = r.controllers || {};
+  let programHeld = 0;
+  let walletHeld = 0;
+  for (const f of flags) {
+    const c = ctl[holderOf[f.id]];
+    if (!c) continue;
+    f.controller = c.kind;
+    f.holder = holderOf[f.id];
+    if (c.kind === "program") {
+      programHeld++;
+      f.program = c.program;
+      f.points = Math.round(f.points * PROGRAM_DISCOUNT);
+      f.text += ` Held by a program${c.program ? ` (${short(c.program)})` : ""}, not a wallet.`;
+    } else {
+      walletHeld++;
+      if (!f.text.includes(short(f.holder))) f.text += ` Held by wallet ${short(f.holder)}.`;
+    }
+  }
+  const category = programHeld > 0 && walletHeld === 0 ? "protocol" : "launch";
+  if (category === "protocol") {
+    // Protocols mint many similar tokens (one per market); that's expected, not a warning sign.
+    for (const id of ["serial_launcher", "copycat"]) {
+      const i = flags.findIndex((f) => f.id === id);
+      if (i >= 0) notes.push(`${flags.splice(i, 1)[0].text.replace(/ \((serial launcher|copycat wave)\)\.$/, ".")} Expected for a protocol creating markets.`);
+    }
+    notes.unshift("Protocol-issued token: every power over it is held by a program address, not a person's wallet (typical of prediction-market outcome tokens and vault/LP shares). Lower risk, but only as safe as that program's rules.");
+  }
+
   if (OFFICIAL.has(r.mint)) {
     // Official assets: controls are held by the issuer on purpose. Still worth knowing.
     const sym = [...WELL_KNOWN].find(([, m]) => m === r.mint)?.[0];
-    const notes = flags.filter((f) => f.id !== "brand_copy" && f.id !== "impersonation").map((f) => `Issuer control: ${f.text}`);
-    return { score: 0, level: "KNOWN", flags: [], notes, positives: [`Official ${sym} mint (well-known asset).`, ...positives] };
+    const issuer = flags.filter((f) => f.id !== "brand_copy" && f.id !== "impersonation").map((f) => `Issuer control: ${f.text}`);
+    return { score: 0, level: "KNOWN", category: "official", flags: [], notes: issuer, positives: [`Official ${sym} mint (well-known asset).`, ...positives] };
   }
 
   const score = Math.min(100, flags.reduce((s, f) => s + f.points, 0));
   const level = LEVELS.find(([min]) => score >= min)[1];
   flags.sort((a, b) => b.points - a.points);
-  return { score, level, flags, notes: [], positives };
+  return { score, level, category, flags, notes, positives };
 }
 
 function short(k) {

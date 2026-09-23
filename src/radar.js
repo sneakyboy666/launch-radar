@@ -6,6 +6,13 @@ import { scoreReport } from "./score.js";
 
 const LEVEL_ORDER = { LOW: 0, KNOWN: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 };
 
+// Normalized name/symbol used to spot copycat waves ("Weird Cat" == "WEIRDCAT").
+export function nameKey(md) {
+  const sym = String(md?.symbol || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const name = String(md?.name || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return sym.length >= 2 ? sym : name.length >= 3 ? name : null;
+}
+
 export class Radar extends EventEmitter {
   constructor(rpc, cfg) {
     super();
@@ -16,14 +23,27 @@ export class Radar extends EventEmitter {
     this.queue = [];
     this.running = 0;
     this.startedAt = Date.now();
-    this.counters = { launches: 0, analyzed: 0, skipped: 0, failed: 0, byLevel: { LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0, KNOWN: 0 }, flags: {} };
+    this.counters = { launches: 0, analyzed: 0, skipped: 0, failed: 0, byLevel: { LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0, KNOWN: 0 }, protocol: 0, flags: {} };
     this.launchTimes = [];
+    this.recent = []; // { t, creator, key } for serial-launcher and copycat detection
+  }
+
+  #context(entry) {
+    const hourAgo = Date.now() - 60 * 60 * 1000;
+    this.recent = this.recent.filter((x) => x.t > hourAgo);
+    const creator = entry.report?.creator?.address || entry.launch.creator;
+    const key = nameKey(entry.report?.metadata || entry.launch);
+    return {
+      creatorLaunches: creator ? this.recent.filter((x) => x.creator === creator).length : 0,
+      sameNameLaunches: key ? this.recent.filter((x) => x.key === key && x.mint !== entry.mint).length : 0,
+    };
   }
 
   onLaunch(launch) {
     if (this.tokens.has(launch.mint)) return;
     this.counters.launches++;
     this.launchTimes.push(Date.now());
+    this.recent.push({ t: Date.now(), mint: launch.mint, creator: launch.creator || null, key: nameKey(launch) });
     const entry = { mint: launch.mint, launch, status: "queued", flow: { buys: 0, sells: 0, buyUsd: 0, sellUsd: 0, wallets: new Set() } };
     this.tokens.set(launch.mint, entry);
     this.order.unshift(launch.mint);
@@ -77,16 +97,23 @@ export class Radar extends EventEmitter {
       const report = await analyzeToken(this.rpc, entry.mint, { withCreator: !this.cfg.lightMode, withHolders: !this.cfg.lightMode });
       if (!report.metadata && entry.launch.name) report.metadata = { source: "launch-event", name: entry.launch.name, symbol: entry.launch.symbol, isMutable: false };
       if (!report.creator && entry.launch.creator) report.creator = { address: entry.launch.creator };
-      const risk = scoreReport(report);
+      const risk = scoreReport(report, this.#context(entry));
       entry.report = report;
       entry.risk = risk;
       entry.status = "done";
       this.counters.analyzed++;
-      this.counters.byLevel[risk.level]++;
-      for (const f of risk.flags) this.counters.flags[f.id] = (this.counters.flags[f.id] || 0) + 1;
+      // Protocol-issued tokens (prediction-market shares etc.) are counted apart so they don't
+      // inflate the scam statistics, and only alert when they're CRITICAL anyway.
+      const protocol = risk.category === "protocol";
+      if (protocol) this.counters.protocol++;
+      else {
+        this.counters.byLevel[risk.level]++;
+        for (const f of risk.flags) this.counters.flags[f.id] = (this.counters.flags[f.id] || 0) + 1;
+      }
       const v = this.view(entry);
       this.emit("update", v);
-      if (LEVEL_ORDER[risk.level] >= LEVEL_ORDER[this.cfg.alertLevel]) this.emit("alert", v);
+      const alertAt = protocol ? LEVEL_ORDER.CRITICAL : LEVEL_ORDER[this.cfg.alertLevel];
+      if (LEVEL_ORDER[risk.level] >= alertAt) this.emit("alert", v);
     } catch (e) {
       entry.status = "failed";
       entry.error = e.message;
@@ -108,9 +135,11 @@ export class Radar extends EventEmitter {
       status: entry.status,
       error: entry.error || null,
       level: entry.risk?.level || null,
+      category: entry.risk?.category || null,
       score: entry.risk?.score ?? null,
       flags: entry.risk?.flags || [],
       positives: entry.risk?.positives || [],
+      notes: entry.risk?.notes || [],
       program: entry.report?.token?.program || null,
       analysisMs: entry.report?.ms ?? null,
       flow: {
@@ -129,7 +158,7 @@ export class Radar extends EventEmitter {
     const now = Date.now();
     this.launchTimes = this.launchTimes.filter((t) => now - t < 10 * 60 * 1000);
     const lastMin = this.launchTimes.filter((t) => now - t < 60 * 1000).length;
-    const a = this.counters.analyzed || 1;
+    const a = this.counters.analyzed - this.counters.protocol || 1; // percentages cover real launches only
     const pct = (id) => Math.round((100 * (this.counters.flags[id] || 0)) / a);
     return {
       uptimeSec: Math.round((now - this.startedAt) / 1000),
@@ -140,6 +169,7 @@ export class Radar extends EventEmitter {
       failed: this.counters.failed,
       queue: this.queue.length,
       byLevel: this.counters.byLevel,
+      protocolTokens: this.counters.protocol,
       pctMintAuthority: pct("mint_authority"),
       pctFreezeAuthority: pct("freeze_authority"),
       pctImpersonation: Math.round((100 * ((this.counters.flags.homoglyph || 0) + (this.counters.flags.brand_copy || 0) + (this.counters.flags.impersonation || 0))) / a),

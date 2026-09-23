@@ -1,1 +1,244 @@
-<!doctype html><title>placeholder</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Launch Radar</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0d0f12; --panel: #15181d; --panel2: #1b1f26; --line: #262b33; --ink: #eef1f5; --ink2: #a8b0bd; --muted: #6f7886;
+  --accent: #7c5cff; --crit: #ff4d5e; --high: #ff8a4c; --med: #f5c542; --low: #3ecf8e; --known: #4cb6ff;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { color-scheme: light; --bg: #f6f7f9; --panel: #ffffff; --panel2: #f1f3f6; --line: #e2e5ea; --ink: #11151b; --ink2: #4a5260; --muted: #7b8494; }
+}
+:root[data-theme="light"] { color-scheme: light; --bg: #f6f7f9; --panel: #ffffff; --panel2: #f1f3f6; --line: #e2e5ea; --ink: #11151b; --ink2: #4a5260; --muted: #7b8494; }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+h1 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+h1 span { color: var(--muted); font-weight: 500; font-size: 13px; margin-left: 8px; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; color: var(--ink2); background: var(--panel2); }
+.pill b { color: var(--ink); }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; background: var(--muted); }
+.dot.on { background: var(--low); } .dot.off { background: var(--crit); }
+main { padding: 16px 20px 40px; max-width: 1400px; margin: 0 auto; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.metric { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.metric .k { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.metric .v { font-size: 24px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.toolbar button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink2); cursor: pointer; }
+.toolbar button.active { background: var(--accent); border-color: var(--accent); color: white; }
+.toolbar input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); min-width: 260px; flex: 1; max-width: 460px; }
+.grid { display: grid; grid-template-columns: 1fr 380px; gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; background: var(--panel2); }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--panel2); }
+tbody tr.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink2); }
+.tag { display: inline-block; margin-top: 3px; font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line, #3a3f47); color: var(--muted, #9aa3ad); vertical-align: middle; }
+.badge { display: inline-block; min-width: 74px; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 2px 8px; border-radius: 6px; color: #0d0f12; }
+.CRITICAL { background: var(--crit); color: white; } .HIGH { background: var(--high); } .MEDIUM { background: var(--med); } .LOW { background: var(--low); } .KNOWN { background: var(--known); }
+.PENDING { background: var(--panel2); color: var(--muted); border: 1px solid var(--line); }
+.sym { font-weight: 650; } .name { color: var(--muted); font-size: 12px; }
+.flagtxt { color: var(--ink2); font-size: 12.5px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flow { font-size: 12px; color: var(--ink2); white-space: nowrap; }
+.bar { display: inline-block; width: 60px; height: 6px; background: var(--crit); border-radius: 3px; vertical-align: middle; overflow: hidden; margin-left: 6px; }
+.bar i { display: block; height: 100%; background: var(--low); }
+.detail { padding: 14px 16px; position: sticky; top: 76px; }
+.detail h2 { margin: 0 0 4px; font-size: 18px; }
+.detail ul { list-style: none; padding: 0; margin: 10px 0; }
+.detail li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.detail li .pts { color: var(--muted); font-size: 11px; margin-left: 6px; }
+.x { color: var(--crit); font-weight: 700; margin-right: 6px; } .ok { color: var(--low); font-weight: 700; margin-right: 6px; } .info { color: var(--known); font-weight: 700; margin-right: 6px; }
+.empty { color: var(--muted); padding: 30px; text-align: center; }
+a { color: var(--accent); }
+.checkrow { display: flex; gap: 8px; margin-top: 10px; }
+.checkrow input { flex: 1; font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); }
+.checkrow button { font: inherit; padding: 7px 12px; border-radius: 8px; border: 0; background: var(--accent); color: white; cursor: pointer; }
+footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Launch Radar <span>live Solana launch safety</span></h1>
+  <div class="pills" id="pills"></div>
+</header>
+<main>
+  <div class="metrics" id="metrics"></div>
+  <div class="toolbar">
+    <button data-f="all" class="active">All</button>
+    <button data-f="risky">High + Critical</button>
+    <button data-f="traps">Token-2022 traps</button>
+    <button data-f="imp">Impersonation</button>
+    <button data-f="protocol">Protocol tokens</button>
+    <input id="q" placeholder="Filter by symbol, name or mint…" aria-label="Filter">
+  </div>
+  <div class="grid">
+    <div class="card">
+      <table>
+        <thead><tr><th>Risk</th><th class="num">Score</th><th>Token</th><th>Top finding</th><th>Flow</th><th>Source</th><th>Seen</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="7" class="empty">Waiting for new launches…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card detail" id="detail">
+      <h2>Check any token</h2>
+      <div class="name">Paste a mint address for a full safety report.</div>
+      <div class="checkrow"><input id="mintIn" placeholder="Mint address"><button id="checkBtn">Check</button></div>
+      <div id="checkOut"></div>
+      <footer>Click a row for details. Scores are heuristics that explain what was found on-chain, not financial advice.</footer>
+    </div>
+  </div>
+</main>
+<script>
+const tokens = new Map();
+let order = [];
+let filter = "all";
+let selected = null;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? s + "s" : Math.round(s / 60) + "m"; };
+const TRAPS = new Set(["permanent_delegate", "non_transferable", "default_frozen", "pausable", "transfer_hook", "transfer_fee"]);
+const IMP = new Set(["homoglyph", "brand_copy", "impersonation"]);
+
+function matches(t) {
+  const q = $("q").value.trim().toLowerCase();
+  if (q && !(`${t.symbol} ${t.name} ${t.mint}`.toLowerCase().includes(q))) return false;
+  if (filter === "protocol") return t.category === "protocol";
+  if (filter !== "all" && t.category === "protocol") return false;
+  if (filter === "risky") return t.level === "HIGH" || t.level === "CRITICAL";
+  if (filter === "traps") return t.flags.some((f) => TRAPS.has(f.id)) || String(t.source).startsWith("token-2022");
+  if (filter === "imp") return t.flags.some((f) => IMP.has(f.id));
+  return true;
+}
+
+function renderRows() {
+  const list = order.map((m) => tokens.get(m)).filter(Boolean).filter(matches).slice(0, 150);
+  if (!list.length) { $("rows").innerHTML = `<tr><td colspan="7" class="empty">${order.length ? "No launches match this filter yet." : "Waiting for new launches…"}</td></tr>`; return; }
+  $("rows").innerHTML = list.map((t) => {
+    const lvl = t.level || "PENDING";
+    const label = t.level || (t.status === "skipped" ? "SKIPPED" : t.status === "failed" ? "ERROR" : "…");
+    const top = t.flags[0]?.text || t.positives?.[0] || (t.error ? "Error: " + t.error : "");
+    const f = t.flow;
+    const flow = f.buys + f.sells ? `${f.buys}B / ${f.sells}S${f.buyPressure !== null ? `<span class="bar" title="buy pressure ${f.buyPressure}%"><i style="width:${f.buyPressure}%"></i></span>` : ""}` : `<span class="name">—</span>`;
+    return `<tr data-m="${esc(t.mint)}" class="${selected === t.mint ? "sel" : ""}">
+      <td><span class="badge ${esc(lvl)}">${esc(label)}</span>${t.category === "protocol" ? `<div class="tag" title="Every power over this token is held by a program, not a person">protocol</div>` : ""}</td>
+      <td class="num">${t.score ?? ""}</td>
+      <td><div class="sym">${esc(t.symbol || "?")}</div><div class="name">${esc((t.name || "").slice(0, 40))}</div></td>
+      <td><div class="flagtxt" title="${esc(top)}">${esc(top)}</div></td>
+      <td class="flow">${flow}</td>
+      <td class="name">${esc(t.source)}</td>
+      <td class="name">${ago(t.seenAt)}</td></tr>`;
+  }).join("");
+}
+
+function renderDetail(t) {
+  if (!t) return;
+  const items = [
+    ...t.flags.map((f) => `<li><span class="x">✗</span>${esc(f.text)}<span class="pts">+${f.points}</span></li>`),
+    ...(t.notes || []).map((n) => `<li><span class="info">i</span>${esc(n)}</li>`),
+    ...(t.positives || []).map((p) => `<li><span class="ok">✓</span>${esc(p)}</li>`),
+  ].join("");
+  $("detail").innerHTML = `
+    <h2>${esc(t.symbol || "?")} <span class="badge ${esc(t.level || "PENDING")}">${esc(t.level || t.status)}</span>${t.category === "protocol" ? ` <span class="tag">protocol</span>` : ""}</h2>
+    <div class="name">${esc(t.name || "")}</div>
+    <div class="mono" style="margin-top:6px">${esc(t.mint)}</div>
+    <ul>${items || "<li class='name'>Analysis pending…</li>"}</ul>
+    <div class="name">Score ${t.score ?? "–"}/100 · ${esc(t.program || "")} · analyzed in ${t.analysisMs ?? "–"} ms · source ${esc(t.source)}</div>
+    ${t.creator ? `<div class="name" style="margin-top:6px">Creator <span class="mono">${esc(t.creator)}</span></div>` : ""}
+    <div style="margin-top:10px"><a href="https://solscan.io/token/${esc(t.mint)}" target="_blank" rel="noopener">Open on Solscan</a></div>
+    <div class="checkrow"><input id="mintIn" placeholder="Check another mint"><button id="checkBtn">Check</button></div><div id="checkOut"></div>`;
+  bindCheck();
+}
+
+function renderStatus(s) {
+  const m = s.metrics;
+  const src = s.sources || {};
+  const pill = (name, st) => `<span class="pill"><span class="dot ${st?.connected ? "on" : "off"}"></span>${name}</span>`;
+  $("pills").innerHTML = [
+    `<span class="pill"><b>${s.usingSolami ? "Solami" : "Public RPC"}</b>${s.lightMode ? " · light mode" : ""}</span>`,
+    pill("Pump.fun launches", src.launches),
+    src.traps ? pill("Token-2022 trap watch", src.traps) : "",
+    src.blur ? pill("Solami Blur trades", src.blur) : "",
+    `<span class="pill">RPC ${m.rpc.avgLatencyMs ?? "–"} ms</span>`,
+  ].join("");
+  const card = (k, v) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  $("metrics").innerHTML = [
+    card("Launches / min", m.launchesPerMin),
+    card("Analyzed", m.analyzed),
+    card("High + critical", m.byLevel.HIGH + m.byLevel.CRITICAL),
+    card("Mint auth. active", m.pctMintAuthority + "%"),
+    card("Impersonation", m.pctImpersonation + "%"),
+    card("T22 traps caught", (src.traps?.riskyMints ?? 0)),
+    card("New T22 mints seen", (src.traps?.newMints ?? 0)),
+    card("Protocol tokens", m.protocolTokens ?? 0),
+  ].join("");
+}
+
+function upsert(t) {
+  if (!tokens.has(t.mint)) order.unshift(t.mint);
+  tokens.set(t.mint, t);
+  if (order.length > 400) tokens.delete(order.pop());
+}
+
+function bindCheck() {
+  const go = async () => {
+    const mint = $("mintIn").value.trim();
+    if (!mint) return;
+    $("checkOut").innerHTML = `<div class="name" style="margin-top:8px">Checking…</div>`;
+    try {
+      const res = await fetch("/api/check?mint=" + encodeURIComponent(mint));
+      const j = await res.json();
+      if (j.error) throw new Error(j.error);
+      renderDetail({ mint, symbol: j.report.metadata?.symbol, name: j.report.metadata?.name, level: j.risk.level, score: j.risk.score, flags: j.risk.flags, positives: j.risk.positives, notes: j.risk.notes, category: j.risk.category, program: j.report.token.program, analysisMs: j.report.ms, source: "manual check", creator: j.report.creator?.address, flow: {} });
+    } catch (e) {
+      $("checkOut").innerHTML = `<div class="name" style="margin-top:8px">Error: ${esc(e.message)}</div>`;
+    }
+  };
+  $("checkBtn").onclick = go;
+  $("mintIn").onkeydown = (e) => { if (e.key === "Enter") go(); };
+}
+
+document.querySelectorAll(".toolbar button").forEach((b) => b.onclick = () => {
+  filter = b.dataset.f;
+  document.querySelectorAll(".toolbar button").forEach((x) => x.classList.toggle("active", x === b));
+  renderRows();
+});
+$("q").oninput = renderRows;
+$("rows").onclick = (e) => {
+  const tr = e.target.closest("tr[data-m]");
+  if (!tr) return;
+  selected = tr.dataset.m;
+  renderDetail(tokens.get(selected));
+  renderRows();
+};
+bindCheck();
+
+const es = new EventSource("/events");
+es.addEventListener("snapshot", (e) => {
+  const d = JSON.parse(e.data);
+  d.tokens.slice().reverse().forEach(upsert);
+  renderStatus(d.status);
+  renderRows();
+});
+es.addEventListener("token", (e) => {
+  const t = JSON.parse(e.data);
+  upsert(t);
+  if (selected === t.mint) renderDetail(t);
+  scheduleRender();
+});
+es.addEventListener("status", (e) => renderStatus(JSON.parse(e.data)));
+let pending = false;
+function scheduleRender() { if (pending) return; pending = true; requestAnimationFrame(() => { pending = false; renderRows(); }); }
+setInterval(renderRows, 5000);
+</script>
+</body>
+</html>

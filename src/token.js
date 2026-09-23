@@ -1,5 +1,5 @@
 // Fetch everything needed to judge a token's safety, using plain Solana RPC calls.
-import { base58Encode, metadataPda, PROGRAMS } from "./solana.js";
+import { base58Decode, base58Encode, isOnCurve, metadataPda, PROGRAMS } from "./solana.js";
 
 // Programs whose accounts hold supply on behalf of a pool/curve (not a "whale").
 export const POOL_PROGRAMS = new Map([
@@ -75,6 +75,43 @@ export function summarizeMint(parsedAccount) {
   };
 }
 
+// Every address that holds a power over the token, keyed by what it can do.
+export function authorityAddresses(m, metadata) {
+  const e = m.extensions || {};
+  const out = {
+    mint_authority: m.mintAuthority,
+    freeze_authority: m.freezeAuthority,
+    permanent_delegate: e.permanentDelegate?.delegate,
+    pausable: e.pausableConfig?.authority,
+    fee_authority: e.transferFeeConfig?.transferFeeConfigAuthority,
+    mint_close: e.mintCloseAuthority?.closeAuthority,
+    mutable_metadata: metadata?.isMutable ? metadata.updateAuthority : null,
+  };
+  for (const k of Object.keys(out)) if (!out[k]) delete out[k];
+  return out;
+}
+
+// Wallet (a key someone holds, can act any time) or program address (PDA: only the owning
+// program can sign, e.g. a prediction market settling its outcome tokens).
+export async function classifyControllers(rpc, addresses) {
+  const unique = [...new Set(addresses)];
+  const result = {};
+  const pdas = [];
+  for (const a of unique) {
+    let onCurve = true;
+    try {
+      onCurve = isOnCurve(base58Decode(a));
+    } catch {}
+    result[a] = { kind: onCurve ? "wallet" : "program", program: null };
+    if (!onCurve) pdas.push(a);
+  }
+  if (pdas.length) {
+    const accs = await rpc.call("getMultipleAccounts", [pdas, { encoding: "base64", dataSlice: { offset: 0, length: 0 }, commitment: "confirmed" }]);
+    pdas.forEach((a, i) => (result[a].program = accs?.value?.[i]?.owner ?? null));
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------- analysis
 export async function analyzeToken(rpc, mint, { withCreator = true, withHolders = true } = {}) {
   const started = Date.now();
@@ -105,6 +142,16 @@ export async function analyzeToken(rpc, mint, { withCreator = true, withHolders 
       }
     } catch (e) {
       report.errors.push(`metadata: ${e.message}`);
+    }
+  }
+
+  // Who holds each power: a wallet, or a program (PDA)?
+  report.authorities = authorityAddresses(m, report.metadata);
+  if (Object.keys(report.authorities).length) {
+    try {
+      report.controllers = await classifyControllers(rpc, Object.values(report.authorities));
+    } catch (e) {
+      report.errors.push(`controllers: ${e.message}`);
     }
   }
 
