@@ -117,6 +117,9 @@ export function scoreReport(r, ctx = {}) {
 
   // --- behaviour seen by the radar itself (only available in live mode)
   if (ctx.creatorLaunches >= 3) add(25, "serial_launcher", `Creator wallet launched ${ctx.creatorLaunches} tokens in the last hour (serial launcher).`);
+  const cs = ctx.creatorSold;
+  if (cs && cs.pct >= 50) add(35, "creator_dump", `Creator already sold ${Math.round(cs.pct)}% of their tokens, ${fmtAge(cs.afterSec)} after launch.`);
+  else if (cs && cs.pct >= 20) add(15, "creator_dump", `Creator has started selling (${Math.round(cs.pct)}% of their tokens, ${fmtAge(cs.afterSec)} after launch).`);
   if (ctx.sameNameLaunches >= 2) add(10, "copycat", `${ctx.sameNameLaunches} other tokens with this name/symbol launched in the last hour (copycat wave).`);
 
   // --- who holds the powers: a personal wallet can act any time; a program address (PDA)
@@ -162,6 +165,10 @@ export function scoreReport(r, ctx = {}) {
   const level = LEVELS.find(([min]) => score >= min)[1];
   flags.sort((a, b) => b.points - a.points);
   return { score, level, category, flags, notes, positives };
+}
+
+function fmtAge(sec) {
+  return sec < 90 ? `${Math.max(0, Math.round(sec))}s` : `${Math.round(sec / 60)} min`;
 }
 
 function short(k) {

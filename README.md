@@ -16,8 +16,11 @@ seconds, and explains the risk in plain English.
   market events.
 - **Explainable risk score (0–100):** each point comes with a sentence saying what was found
   and why it matters. No black box.
-- **Trade flow:** buy/sell counts, USD volume, unique wallets and buy pressure per token from
-  Solami Blur's decoded trades.
+- **Trade flow + dev-dump detection:** every Pump.fun buy/sell is decoded from the same log stream
+  (`TradeEvent`), so the radar sees the creator selling seconds after launch and re-scores the
+  token live. With a Solami key, Blur's decoded trades add USD volume across venues.
+- **Checks its own predictions:** tracks how often tokens it flagged at launch are later dumped by
+  their creator, versus tokens it scored clean.
 - **Alerts:** HIGH/CRITICAL launches to a Discord (or any) webhook.
 - **Check any token:** `launch-radar check <mint>` or the dashboard's "Check any token" box.
 - **Zero dependencies:** Node 22+ and nothing else. `npm test` runs offline.
@@ -38,6 +41,7 @@ seconds, and explains the risk in plain English.
 | Whale concentration | `getTokenLargestAccounts` + owner programs | Pools/bonding curves are recognized and excluded |
 | Creator holdings | earliest signature's fee payer | How much the deployer still holds |
 | Who holds each power | ed25519 on-curve check + owner program lookup | A permanent delegate in a *wallet* is a trap; in a *program address* (PDA) it's usually a protocol (prediction-market shares, vault/LP tokens) |
+| Creator dump (live) | Pump.fun `TradeEvent` from the log stream | Creator sells most of their bag right after launch: the classic pump-and-dump |
 | Serial launcher | radar memory (1 h window) | Same wallet launching token after token |
 | Copycat wave | normalized name/symbol (1 h window) | Ten "WEIRDCAT"s in an hour |
 
@@ -52,11 +56,22 @@ curve (a key someone holds) or off it (only a program can sign), looks up the ow
 discounts program-held powers, labels the token **protocol**, and keeps them out of the scam
 statistics and alerts. Same powers in a personal wallet stay CRITICAL.
 
+### Does the score predict anything? (live run, 2026-09-23, 10 minutes, public RPC)
+
+| | Tokens | Creator sold ≥50% within minutes |
+|---|---|---|
+| Flagged at launch (MEDIUM+, before any selling) | 92 | **82%** |
+| Scored clean (LOW) | 128 | 50% |
+| All Pump.fun launches | 220 | 60% |
+
+Most Pump.fun creators sell fast, so a clean score is not a buy signal. But tokens Launch Radar
+flags at launch are dumped far more often, and the dashboard keeps measuring this live.
+
 ### Reliability
 
 A 10-minute soak test on mainnet analyzed 354 launches with 0 failures and 0 RPC errors while the
 trap watch processed ~660k Token-2022 log messages. Every stream has a stall watchdog: if a
-socket stays open but goes quiet for 60 s (seen on the public RPC), it is dropped and
+socket stays open but goes quiet for 30 s (seen on the public RPC), it is dropped and
 reconnected with backoff.
 
 ## How it uses Solami

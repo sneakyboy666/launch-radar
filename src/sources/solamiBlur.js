@@ -85,6 +85,30 @@ export class SolamiBlurSource extends EventEmitter {
     this.discovered++;
   }
 
+  #onMessage(ev) {
+    this.stats.messages++;
+    this.stats.lastMessageAt = Date.now();
+    this.dog?.touch();
+    const text = typeof ev.data === "string" ? ev.data : Buffer.from(ev.data).toString("utf8");
+    this.#record(text);
+    let msg;
+    try {
+      msg = JSON.parse(text);
+    } catch {
+      return;
+    }
+    const items = Array.isArray(msg) ? msg : Array.isArray(msg?.data) ? msg.data : Array.isArray(msg?.events) ? msg.events : [msg];
+    for (const item of items) {
+      const n = normalizeBlurEvent(item);
+      if (!n) {
+        this.stats.unknown++;
+        continue;
+      }
+      this.stats[n.type === "trade" ? "trades" : n.type === "launch" ? "launches" : "pools"]++;
+      this.emit(n.type, { ...n, seenAt: Date.now() });
+    }
+  }
+
   #connect() {
     const ws = new WebSocket(this.url);
     this.ws = ws;
@@ -101,26 +125,10 @@ export class SolamiBlurSource extends EventEmitter {
       for (const sub of this.subscriptions) ws.send(JSON.stringify(sub));
     };
     ws.onmessage = (ev) => {
-      this.stats.messages++;
-      this.stats.lastMessageAt = Date.now();
-      this.dog?.touch();
-      const text = typeof ev.data === "string" ? ev.data : Buffer.from(ev.data).toString("utf8");
-      this.#record(text);
-      let msg;
       try {
-        msg = JSON.parse(text);
-      } catch {
-        return;
-      }
-      const items = Array.isArray(msg) ? msg : Array.isArray(msg?.data) ? msg.data : Array.isArray(msg?.events) ? msg.events : [msg];
-      for (const item of items) {
-        const n = normalizeBlurEvent(item);
-        if (!n) {
-          this.stats.unknown++;
-          continue;
-        }
-        this.stats[n.type === "trade" ? "trades" : n.type === "launch" ? "launches" : "pools"]++;
-        this.emit(n.type, { ...n, seenAt: Date.now() });
+        this.#onMessage(ev);
+      } catch (e) {
+        this.emit("warning", { source: "solami-blur", message: `message skipped: ${e.message}` });
       }
     };
     ws.onerror = () => {};

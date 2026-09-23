@@ -25,7 +25,10 @@ read smart-contract settings, and scammers know it. Common traps:
 ## How it catches new tokens (the "sources")
 - **Pump.fun feed**: we subscribe to Pump.fun's program logs over a WebSocket. When a token is
   created, Pump.fun writes a "CreateEvent" into the logs; we decode it directly (name, symbol,
-  mint, creator), so detecting a launch costs zero extra requests.
+  mint, creator), so detecting a launch costs zero extra requests. Every buy and sell also writes a
+  "TradeEvent" (who, buy or sell, how much SOL, how many tokens), which we decode too. That's how
+  we see the creator selling their tokens seconds after launch, and how the token's score goes up
+  live when they do.
 - **Token-2022 trap watch**: we subscribe to the Token-2022 program's logs (~900 messages a
   second). We only react when a new mint is created *and* one of the dangerous extensions is set
   up in the same transaction. That's rare, so it stays cheap.
@@ -55,6 +58,14 @@ wallet count for 40% of the points, and if *every* power is program-held the tok
 out of alerts and scam stats. We found these in our own soak test: they were ~25% of all
 "CRITICAL" results before this fix. Official assets
 (USDC, USDT, PYUSD…) are shown as KNOWN, with their issuer controls listed as information.
+
+## Does the score actually predict anything?
+We check. For every token we remember the level we gave it at launch (before any selling), then
+watch whether its creator sells at least half their tokens. The dashboard shows the dump rate for
+tokens we flagged versus tokens we scored clean. If the flags mean something, the first number is
+much higher, and it is. In a 10-minute live run: 82% of flagged tokens were dumped by their
+creator within minutes, against 50% of clean ones (60% of all Pump.fun launches). Be honest about
+that 50%: most memecoin creators sell fast, so "clean" never means "safe".
 
 ## Why Solami matters here
 - Full analysis of every launch needs lots of requests quickly; Solami Pro gives 200 requests/sec.

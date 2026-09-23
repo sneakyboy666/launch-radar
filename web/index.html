@@ -44,6 +44,7 @@ tbody tr:hover { background: var(--panel2); }
 tbody tr.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink2); }
+.tag.dump { color: var(--crit); border-color: var(--crit); }
 .tag { display: inline-block; margin-top: 3px; font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line, #3a3f47); color: var(--muted, #9aa3ad); vertical-align: middle; }
 .badge { display: inline-block; min-width: 74px; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 2px 8px; border-radius: 6px; color: #0d0f12; }
 .CRITICAL { background: var(--crit); color: white; } .HIGH { background: var(--high); } .MEDIUM { background: var(--med); } .LOW { background: var(--low); } .KNOWN { background: var(--known); }
@@ -128,7 +129,8 @@ function renderRows() {
     const label = t.level || (t.status === "skipped" ? "SKIPPED" : t.status === "failed" ? "ERROR" : "…");
     const top = t.flags[0]?.text || t.positives?.[0] || (t.error ? "Error: " + t.error : "");
     const f = t.flow;
-    const flow = f.buys + f.sells ? `${f.buys}B / ${f.sells}S${f.buyPressure !== null ? `<span class="bar" title="buy pressure ${f.buyPressure}%"><i style="width:${f.buyPressure}%"></i></span>` : ""}` : `<span class="name">—</span>`;
+    const vol = f.buyUsd + f.sellUsd ? `$${f.buyUsd} bought / $${f.sellUsd} sold` : `${f.buySol} SOL bought / ${f.sellSol} SOL sold`;
+    const flow = f.buys + f.sells ? `<span title="${esc(vol)}">${f.buys}B / ${f.sells}S</span>${f.buyPressure !== null ? `<span class="bar" title="buy pressure ${f.buyPressure}%"><i style="width:${f.buyPressure}%"></i></span>` : ""}${t.creatorSoldPct >= 50 ? `<div class="tag dump" title="Creator sold ${Math.round(t.creatorSoldPct)}% of their tokens">dev sold</div>` : ""}` : `<span class="name">—</span>`;
     return `<tr data-m="${esc(t.mint)}" class="${selected === t.mint ? "sel" : ""}">
       <td><span class="badge ${esc(lvl)}">${esc(label)}</span>${t.category === "protocol" ? `<div class="tag" title="Every power over this token is held by a program, not a person">protocol</div>` : ""}</td>
       <td class="num">${t.score ?? ""}</td>
@@ -152,11 +154,29 @@ function renderDetail(t) {
     <div class="name">${esc(t.name || "")}</div>
     <div class="mono" style="margin-top:6px">${esc(t.mint)}</div>
     <ul>${items || "<li class='name'>Analysis pending…</li>"}</ul>
+    ${flowLine(t)}
     <div class="name">Score ${t.score ?? "–"}/100 · ${esc(t.program || "")} · analyzed in ${t.analysisMs ?? "–"} ms · source ${esc(t.source)}</div>
     ${t.creator ? `<div class="name" style="margin-top:6px">Creator <span class="mono">${esc(t.creator)}</span></div>` : ""}
     <div style="margin-top:10px"><a href="https://solscan.io/token/${esc(t.mint)}" target="_blank" rel="noopener">Open on Solscan</a></div>
     <div class="checkrow"><input id="mintIn" placeholder="Check another mint"><button id="checkBtn">Check</button></div><div id="checkOut"></div>`;
   bindCheck();
+}
+
+// Share of tokens whose creator later sold ≥50%: flagged at launch (MEDIUM+) vs clean (LOW).
+function outcomeText(o) {
+  if (!o) return "–";
+  const flagged = ["MEDIUM", "HIGH", "CRITICAL"].reduce((a, k) => ({ n: a.n + o[k].n, d: a.d + o[k].dumped }), { n: 0, d: 0 });
+  const pct = (d, n) => (n ? Math.round((100 * d) / n) + "%" : "–");
+  return `${pct(flagged.d, flagged.n)} vs ${pct(o.LOW.dumped, o.LOW.n)}`;
+}
+
+function flowLine(t) {
+  const f = t.flow || {};
+  if (!(f.buys + f.sells)) return "";
+  const vol = f.buyUsd + f.sellUsd ? `$${f.buyUsd} in / $${f.sellUsd} out` : `${f.buySol} SOL in / ${f.sellSol} SOL out`;
+  const dev = t.creatorSoldPct !== null && t.creatorSoldPct !== undefined ? ` · creator sold ${Math.round(t.creatorSoldPct)}%` : "";
+  const curve = f.curveSol !== null && f.curveSol !== undefined ? ` · curve ${f.curveSol} SOL` : "";
+  return `<div class="name" style="margin:6px 0">Flow: ${f.buys} buys / ${f.sells} sells (${vol}), ${f.uniqueWallets} wallets${curve}${dev}</div>`;
 }
 
 function renderStatus(s) {
@@ -180,6 +200,8 @@ function renderStatus(s) {
     card("T22 traps caught", (src.traps?.riskyMints ?? 0)),
     card("New T22 mints seen", (src.traps?.newMints ?? 0)),
     card("Protocol tokens", m.protocolTokens ?? 0),
+    card("Creator dumps", m.creatorDumps ?? 0),
+    card("Creator dumped: flagged vs clean", outcomeText(m.outcomes)),
   ].join("");
 }
 

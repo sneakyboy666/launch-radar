@@ -1,6 +1,6 @@
 // Some endpoints stop streaming without closing the socket (seen on the public RPC during a
 // soak test). A stream that goes quiet for too long is dropped and reconnected.
-export const STALE_MS = 60000;
+export const STALE_MS = 30000; // these streams carry 100+ messages/s; 30s of silence means stuck
 
 export class StallWatchdog {
   constructor(onStall, staleMs = STALE_MS) {

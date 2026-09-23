@@ -59,6 +59,7 @@ function watch() {
   if (cfg.blurUrl) sources.blur = new SolamiBlurSource(cfg.blurUrl).start();
 
   sources.launches.on("launch", (l) => radar.onLaunch(l));
+  sources.launches.on("trade", (t) => radar.onTrade(t));
   sources.traps?.on("launch", (l) => radar.onLaunch(l));
   if (sources.blur) {
     sources.blur.on("launch", (l) => radar.onLaunch(l));

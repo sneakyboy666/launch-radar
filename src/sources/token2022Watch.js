@@ -73,6 +73,27 @@ export class Token2022TrapWatch extends EventEmitter {
     }
   }
 
+  #onMessage(ev) {
+    this.stats.messages++;
+    this.stats.lastMessageAt = Date.now();
+    this.dog?.touch();
+    const text = typeof ev.data === "string" ? ev.data : "";
+    if (!text.includes("InitializeMint")) return; // cheap pre-filter before JSON.parse
+    let v;
+    try {
+      v = JSON.parse(text)?.params?.result;
+    } catch {
+      return;
+    }
+    if (!v?.value || v.value.err) return;
+    this.stats.newMints++;
+    const exts = riskyExtensionsInLogs(v.value.logs || []);
+    if (!exts.length) return;
+    this.stats.riskyMints++;
+    for (const e of exts) this.stats.byExtension[e] = (this.stats.byExtension[e] || 0) + 1;
+    this.#resolve(v.value.signature, exts, v.context?.slot);
+  }
+
   #connect() {
     const ws = new WebSocket(this.wsUrl);
     this.ws = ws;
@@ -89,24 +110,11 @@ export class Token2022TrapWatch extends EventEmitter {
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "logsSubscribe", params: [{ mentions: [PROGRAMS.TOKEN_2022] }, { commitment: "confirmed" }] }));
     };
     ws.onmessage = (ev) => {
-      this.stats.messages++;
-      this.stats.lastMessageAt = Date.now();
-      this.dog?.touch();
-      const text = typeof ev.data === "string" ? ev.data : "";
-      if (!text.includes("InitializeMint")) return; // cheap pre-filter before JSON.parse
-      let v;
       try {
-        v = JSON.parse(text)?.params?.result;
-      } catch {
-        return;
+        this.#onMessage(ev);
+      } catch (e) {
+        this.emit("warning", { source: "token2022-traps", message: `message skipped: ${e.message}` });
       }
-      if (!v?.value || v.value.err) return;
-      this.stats.newMints++;
-      const exts = riskyExtensionsInLogs(v.value.logs || []);
-      if (!exts.length) return;
-      this.stats.riskyMints++;
-      for (const e of exts) this.stats.byExtension[e] = (this.stats.byExtension[e] || 0) + 1;
-      this.#resolve(v.value.signature, exts, v.context?.slot);
     };
     ws.onerror = () => {};
     ws.onclose = () => {

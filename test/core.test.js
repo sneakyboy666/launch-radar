@@ -4,10 +4,10 @@ import { createHash } from "node:crypto";
 import { base58Decode, base58Encode, isOnCurve, metadataPda } from "../src/solana.js";
 import { authorityAddresses, classifyControllers, parseMetaplexMetadata, summarizeMint } from "../src/token.js";
 import { scoreReport } from "../src/score.js";
-import { decodePumpCreateEvent } from "../src/sources/rpcLogs.js";
+import { decodePumpCreateEvent, decodePumpTradeEvent } from "../src/sources/rpcLogs.js";
 import { riskyExtensionsInLogs, mintsFromParsedTx } from "../src/sources/token2022Watch.js";
 import { normalizeBlurEvent } from "../src/sources/solamiBlur.js";
-import { nameKey } from "../src/radar.js";
+import { nameKey, Radar } from "../src/radar.js";
 
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const clean = (over = {}) => ({ mint: "Fake1111111111111111111111111111111111111111", token: { mintAuthority: null, freezeAuthority: null, extensions: {} }, metadata: { name: "Cat", symbol: "CAT", isMutable: false }, ...over });
@@ -186,4 +186,68 @@ test("giveaway and link lures are flagged as bait", () => {
   assert.equal(name("t.me/moonchat").flags[0].points, 25);
   assert.deepEqual(ids(name("Free Bird", "BIRD")), []);
   assert.deepEqual(ids(name("Cat in a Hat", "HAT")), []);
+});
+
+// Captured from mainnet Pump.fun logs (a buy), 2026-09-23.
+const LIVE_TRADE = "vdt/007mYe56mo+F4qGL6ocr/ToL714+I6w8UbH0yDfOVJD/p2f1jZY6tgQAAAAAC2qRsbAAAAABfwAlxbO+VlTyH4oltE2/QcQzttxu0qU8LbZ89zAu8JafY7RqAAAAAN2M1X0NAAAAlVSpDD75AQDd4LGBBgAAAJW8lsCs+gAAYIzMHfzpYbQ7d5wZFQWm4tO/RdWk20YYrXbILWF1RTVfAAAAAAAAAI11CwAAAAAAM3gzVNsth3OfNqW56305IkwTk/MFBTuKHtkVDYWRZ6ceAAAAAAAAAGOeAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAGJ1eQAAAAAAAAAAAAAAAAAAAAAAiBMAAAAAAADGugUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAJY6tgQAAAAA3YzVfQ0AAADd4LGBBgAAAB4AAAAAAAAAY54DAAAAAAA=";
+
+test("pump.fun TradeEvent decoder reads a live trade", () => {
+  const t = decodePumpTradeEvent(LIVE_TRADE);
+  assert.equal(t.side, "buy");
+  assert.ok(t.mint.length >= 32 && t.wallet.length >= 32 && t.creator.length >= 32);
+  assert.ok(t.sol > 0 && t.sol < 1000);
+  assert.ok(t.tokens > 0n);
+  assert.ok(t.timestamp > 1.7e9 && t.timestamp < 2e9, "timestamp is a plausible unix time");
+  assert.ok(t.priceSol > 0 && t.priceSol < 1);
+  assert.ok(t.curveSol >= 0 && t.curveSol < 1000);
+  assert.equal(decodePumpTradeEvent(Buffer.alloc(200).toString("base64")), null);
+});
+
+test("radar tracks creator selling and re-scores a token live", async () => {
+  const rpc = { stats: { requests: 0, errors: 0, retries: 0 }, avgLatencyMs: () => 0 };
+  const radar = new Radar(rpc, { lightMode: true, concurrency: 1, maxQueue: 10, analyzeDelayMs: 0, alertLevel: "HIGH" });
+  const alerts = [];
+  radar.on("alert", (v) => alerts.push(v));
+  const mint = "Fake1111111111111111111111111111111111111111";
+  const dev = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+  radar.onLaunch({ mint, name: "Moon", symbol: "MOON", creator: dev, source: "pump.fun", seenAt: Date.now() });
+  const entry = radar.tokens.get(mint);
+  // Simulate a finished analysis of a clean token (no RPC needed).
+  entry.report = { mint, token: { mintAuthority: null, freezeAuthority: null, extensions: {} }, metadata: { name: "Moon", symbol: "MOON", isMutable: false }, errors: [] };
+  entry.ctx = {};
+  entry.preLevel = "LOW";
+  radar.outcomes.LOW.n++;
+  entry.status = "done";
+  entry.risk = scoreReport(entry.report);
+  const trade = (side, tokens, wallet = dev) => radar.onTrade({ mint, side, tokens, sol: 1, wallet, source: "pump.fun" });
+  trade("buy", 1000n);
+  trade("buy", 500n, "BuyerWallet11111111111111111111111111111111");
+  radar.onTrade({ mint, side: "buy", usd: 50, wallet: "x", source: "solami-blur" }); // other source ignored
+  assert.equal(radar.view(entry).flow.buys, 2);
+  trade("sell", 300n);
+  assert.equal(radar.view(entry).level, "LOW", "30% sold: noted, not enough to change the level");
+  assert.ok(radar.view(entry).flags.some((f) => f.id === "creator_dump" && f.points === 15));
+  trade("sell", 700n);
+  const v = radar.view(entry);
+  assert.equal(v.creatorSoldPct, 100);
+  assert.ok(v.flags.some((f) => f.id === "creator_dump" && f.points === 35 && /sold 100%/.test(f.text)));
+  assert.equal(v.level, "MEDIUM");
+  assert.equal(radar.metrics().outcomes.LOW.dumped, 1);
+  assert.equal(radar.metrics().creatorDumps, 1);
+  assert.equal(v.flow.buyPressure, 50); // 2 SOL bought vs 2 SOL sold
+});
+
+test("creator dumps are caught even when another source feeds the flow numbers", () => {
+  const rpc = { stats: { requests: 0, errors: 0, retries: 0 }, avgLatencyMs: () => 0 };
+  const radar = new Radar(rpc, { lightMode: true, concurrency: 1, maxQueue: 10, analyzeDelayMs: 0, alertLevel: "HIGH" });
+  const mint = "Fake2222222222222222222222222222222222222222";
+  const dev = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+  radar.onLaunch({ mint, name: "Moon", symbol: "MOON", creator: dev, source: "pump.fun", seenAt: Date.now() });
+  radar.onTrade({ mint, side: "buy", usd: 20, wallet: "x", source: "solami-blur" }); // Blur arrives first
+  radar.onTrade({ mint, side: "buy", tokens: 1000n, sol: 1, wallet: dev, source: "pump.fun" });
+  radar.onTrade({ mint, side: "sell", tokens: 900n, sol: 1, wallet: dev, source: "pump.fun" });
+  const v = radar.view(radar.tokens.get(mint));
+  assert.equal(v.flow.source, "solami-blur");
+  assert.equal(v.creatorSoldPct, 90);
+  assert.equal(radar.metrics().creatorDumps, 1);
 });
