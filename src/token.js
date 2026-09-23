@@ -1,0 +1,159 @@
+// Fetch everything needed to judge a token's safety, using plain Solana RPC calls.
+import { base58Encode, metadataPda, PROGRAMS } from "./solana.js";
+
+// Programs whose accounts hold supply on behalf of a pool/curve (not a "whale").
+export const POOL_PROGRAMS = new Map([
+  [PROGRAMS.PUMP_FUN, "Pump.fun bonding curve"],
+  [PROGRAMS.PUMP_AMM, "PumpSwap pool"],
+  [PROGRAMS.RAYDIUM_AMM_V4, "Raydium AMM"],
+  [PROGRAMS.RAYDIUM_CPMM, "Raydium CPMM"],
+  [PROGRAMS.RAYDIUM_LAUNCHLAB, "Raydium LaunchLab curve"],
+  [PROGRAMS.METEORA_DBC, "Meteora DBC curve"],
+  [PROGRAMS.METEORA_DAMM_V2, "Meteora DAMM pool"],
+  [PROGRAMS.ORCA_WHIRLPOOL, "Orca Whirlpool"],
+]);
+
+// Raydium AMM v4 pools use a single fixed authority wallet (not a PDA owned by the program).
+const KNOWN_POOL_WALLETS = new Map([["5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1", "Raydium AMM authority"]]);
+
+// ---------------------------------------------------------------- Metaplex metadata (borsh)
+export function parseMetaplexMetadata(buf) {
+  let o = 0;
+  const u8 = () => buf[o++];
+  const pubkey = () => {
+    const k = base58Encode(buf.subarray(o, o + 32));
+    o += 32;
+    return k;
+  };
+  const str = () => {
+    const len = buf.readUInt32LE(o);
+    o += 4;
+    const s = buf.subarray(o, o + len).toString("utf8").replace(/\0+$/g, "").trim();
+    o += len;
+    return s;
+  };
+  const key = u8();
+  if (key !== 4) throw new Error(`not a MetadataV1 account (key=${key})`);
+  const updateAuthority = pubkey();
+  const mint = pubkey();
+  const name = str();
+  const symbol = str();
+  const uri = str();
+  o += 2; // seller_fee_basis_points
+  const creators = [];
+  if (u8() === 1) {
+    const n = buf.readUInt32LE(o);
+    o += 4;
+    for (let i = 0; i < n; i++) {
+      const address = pubkey();
+      const verified = u8() === 1;
+      const share = u8();
+      creators.push({ address, verified, share });
+    }
+  }
+  const primarySaleHappened = u8() === 1;
+  const isMutable = u8() === 1;
+  return { updateAuthority, mint, name, symbol, uri, creators, primarySaleHappened, isMutable };
+}
+
+// ---------------------------------------------------------------- mint
+export function summarizeMint(parsedAccount) {
+  const value = parsedAccount?.value;
+  if (!value) return null;
+  const program = value.owner;
+  const info = value.data?.parsed?.info;
+  if (!info || value.data?.parsed?.type !== "mint") return null;
+  const ext = {};
+  for (const e of info.extensions || []) ext[e.extension] = e.state ?? true;
+  return {
+    program: program === PROGRAMS.TOKEN_2022 ? "token-2022" : program === PROGRAMS.TOKEN ? "spl-token" : program,
+    decimals: info.decimals,
+    supply: BigInt(info.supply),
+    mintAuthority: info.mintAuthority ?? null,
+    freezeAuthority: info.freezeAuthority ?? null,
+    extensions: ext,
+  };
+}
+
+// ---------------------------------------------------------------- analysis
+export async function analyzeToken(rpc, mint, { withCreator = true, withHolders = true } = {}) {
+  const started = Date.now();
+  const report = { mint, checkedAt: new Date().toISOString(), errors: [] };
+
+  const mintAcc = await rpc.call("getAccountInfo", [mint, { encoding: "jsonParsed", commitment: "confirmed" }]);
+  const m = summarizeMint(mintAcc);
+  if (!m) throw new Error(`${mint} is not a token mint`);
+  report.token = m;
+
+  // Metadata: Token-2022 embedded metadata, else Metaplex metadata account.
+  const embedded = m.extensions.tokenMetadata;
+  if (embedded) {
+    report.metadata = {
+      source: "token-2022",
+      name: embedded.name,
+      symbol: embedded.symbol,
+      uri: embedded.uri,
+      updateAuthority: embedded.updateAuthority ?? null,
+      isMutable: Boolean(embedded.updateAuthority),
+    };
+  } else {
+    try {
+      const md = await rpc.call("getAccountInfo", [metadataPda(mint), { encoding: "base64", commitment: "confirmed" }]);
+      if (md?.value) {
+        const parsed = parseMetaplexMetadata(Buffer.from(md.value.data[0], "base64"));
+        report.metadata = { source: "metaplex", ...parsed };
+      }
+    } catch (e) {
+      report.errors.push(`metadata: ${e.message}`);
+    }
+  }
+
+  // Holders: largest token accounts -> their owners -> is the owner a pool/curve?
+  if (withHolders) try {
+    const largest = await rpc.call("getTokenLargestAccounts", [mint, { commitment: "confirmed" }]);
+    const accounts = (largest?.value || []).filter((a) => BigInt(a.amount) > 0n);
+    const tokenAccs = accounts.length
+      ? await rpc.call("getMultipleAccounts", [accounts.map((a) => a.address), { encoding: "jsonParsed", commitment: "confirmed" }])
+      : { value: [] };
+    const owners = tokenAccs.value.map((v) => v?.data?.parsed?.info?.owner ?? null);
+    const ownerAccs = owners.filter(Boolean).length
+      ? await rpc.call("getMultipleAccounts", [owners.map((o) => o || PROGRAMS.TOKEN), { encoding: "base64", commitment: "confirmed" }])
+      : { value: [] };
+    const supply = m.supply > 0n ? m.supply : 1n;
+    report.holders = accounts.map((a, i) => {
+      const owner = owners[i];
+      const ownerProgram = ownerAccs.value[i]?.owner ?? null;
+      const poolLabel = KNOWN_POOL_WALLETS.get(owner) || POOL_PROGRAMS.get(ownerProgram) || null;
+      return {
+        tokenAccount: a.address,
+        owner,
+        amount: BigInt(a.amount),
+        pct: Number((BigInt(a.amount) * 1000000n) / supply) / 10000,
+        pool: poolLabel,
+      };
+    });
+  } catch (e) {
+    report.errors.push(`holders: ${e.message}`);
+  }
+
+  // Creator: fee payer of the earliest transaction touching the mint (cheap for new tokens).
+  if (withCreator) {
+    try {
+      const sigs = await rpc.call("getSignaturesForAddress", [mint, { limit: 1000, commitment: "confirmed" }]);
+      if (sigs.length && sigs.length < 1000) {
+        const first = sigs[sigs.length - 1];
+        const tx = await rpc.call("getTransaction", [first.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }]);
+        const payer = tx?.transaction?.message?.accountKeys?.find((k) => k.signer)?.pubkey ?? null;
+        report.creator = { address: payer, firstSignature: first.signature, createdAt: first.blockTime ? new Date(first.blockTime * 1000).toISOString() : null, txCount: sigs.length };
+        if (payer && report.holders) {
+          report.creator.pct = report.holders.filter((h) => h.owner === payer).reduce((s, h) => s + h.pct, 0);
+        }
+      }
+    } catch (e) {
+      report.errors.push(`creator: ${e.message}`);
+    }
+  }
+
+  report.ms = Date.now() - started;
+  return report;
+}

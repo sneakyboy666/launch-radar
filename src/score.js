@@ -1,0 +1,121 @@
+// Explainable risk scoring. Pure function: report in, { score, level, flags, positives } out.
+// Every flag says what was found and what it means for a buyer, in plain English.
+
+const WELL_KNOWN = new Map([
+  ["USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"],
+  ["USDT", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"],
+  ["SOL", "So11111111111111111111111111111111111111112"],
+  ["WSOL", "So11111111111111111111111111111111111111112"],
+  ["JUP", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"],
+  ["BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"],
+  ["WIF", "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"],
+  ["PYTH", "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3"],
+  ["JTO", "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL"],
+  ["RAY", "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R"],
+  ["PUMP", "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn"],
+  ["TRUMP", "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN"],
+  ["PYUSD", "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo"],
+]);
+
+// Official mints of well-known assets: their authorities are held by the issuer on purpose.
+const OFFICIAL = new Set([...WELL_KNOWN.values()]);
+
+// Brands and liquid-staking tokens that scammers copy by name.
+const BRANDS = ["USDC", "USDT", "PYUSD", "JITOSOL", "MSOL", "BSOL", "JUPSOL", "EDGESOL", "PHANTOM", "BINANCE", "COINBASE", "TETHER"];
+
+// Latin look-alikes from Cyrillic and Greek, used to fake names like "BITCОIN".
+const HOMOGLYPH = /[\u0400-\u04FF\u0370-\u03FF]/;
+const LATIN = /[A-Za-z]/;
+
+const LEVELS = [
+  [70, "CRITICAL"],
+  [45, "HIGH"],
+  [20, "MEDIUM"],
+  [0, "LOW"],
+];
+
+export function scoreReport(r) {
+  const flags = [];
+  const positives = [];
+  const add = (points, id, text) => flags.push({ id, points, text });
+  const t = r.token;
+  const ext = t.extensions || {};
+
+  // --- authorities
+  if (t.mintAuthority) add(35, "mint_authority", "Mint authority is still active: the creator can print unlimited new tokens and dump them.");
+  else positives.push("Mint authority revoked (supply is fixed).");
+  if (t.freezeAuthority) add(30, "freeze_authority", "Freeze authority is still active: the creator can freeze your tokens so you can't sell.");
+  else positives.push("Freeze authority revoked.");
+
+  // --- Token-2022 extensions that can trap buyers
+  if (ext.permanentDelegate?.delegate) add(40, "permanent_delegate", `Permanent delegate ${short(ext.permanentDelegate.delegate)} can move or burn tokens from ANY holder's wallet.`);
+  if (ext.nonTransferable) add(40, "non_transferable", "Token is non-transferable: you cannot sell or send it.");
+  if (ext.defaultAccountState && /frozen/i.test(String(ext.defaultAccountState.accountState))) add(35, "default_frozen", "New token accounts start frozen: buyers can be locked out of selling.");
+  if (ext.pausableConfig?.authority) add(30, "pausable", "Transfers can be paused by an authority at any time.");
+  if (ext.transferHook?.programId) add(25, "transfer_hook", `Every transfer runs custom program ${short(ext.transferHook.programId)}, which can block or tax sells.`);
+  const fee = ext.transferFeeConfig;
+  if (fee) {
+    const bps = Math.max(Number(fee.newerTransferFee?.transferFeeBasisPoints ?? 0), Number(fee.olderTransferFee?.transferFeeBasisPoints ?? 0));
+    if (bps > 0) add(Math.min(30, Math.ceil(bps / 100) * 10), "transfer_fee", `Transfer fee of ${(bps / 100).toFixed(2)}% on every transfer (including sells).`);
+    if (fee.transferFeeConfigAuthority) add(10, "fee_authority", "The transfer fee can be raised later by its authority.");
+  }
+  if (ext.mintCloseAuthority?.closeAuthority) add(10, "mint_close", "The mint can be closed by an authority.");
+
+  // --- metadata
+  const md = r.metadata;
+  if (md) {
+    if (md.isMutable && md.updateAuthority) add(10, "mutable_metadata", "Name, symbol and image can still be changed by the creator.");
+    else positives.push("Metadata is immutable.");
+    const sym = (md.symbol || "").trim().toUpperCase().replace(/^\$/, "");
+    const real = WELL_KNOWN.get(sym);
+    if (real && real !== r.mint) add(40, "impersonation", `Uses the symbol ${sym} but is NOT the real ${sym} (${short(real)}): likely an impersonation.`);
+  } else {
+    add(5, "no_metadata", "No token metadata found.");
+  }
+
+  // --- concentration (pools and bonding curves excluded)
+  const holders = (r.holders || []).filter((h) => !h.pool);
+  if (holders.length) {
+    const top = holders[0].pct;
+    const top10 = holders.slice(0, 10).reduce((s, h) => s + h.pct, 0);
+    if (top >= 50) add(30, "top_holder", `One wallet holds ${top.toFixed(1)}% of supply.`);
+    else if (top >= 20) add(15, "top_holder", `One wallet holds ${top.toFixed(1)}% of supply.`);
+    if (top10 >= 50) add(15, "top10", `Top 10 wallets (excluding pools) hold ${top10.toFixed(1)}% of supply.`);
+    else positives.push(`Top 10 wallets (excluding pools) hold ${top10.toFixed(1)}%.`);
+  }
+  const pooled = (r.holders || []).filter((h) => h.pool).reduce((s, h) => s + h.pct, 0);
+  if (pooled > 0) positives.push(`${pooled.toFixed(1)}% of supply sits in pools/curves.`);
+
+  // --- creator
+  if (r.creator?.pct !== undefined) {
+    if (r.creator.pct >= 30) add(20, "creator_holds", `Creator wallet still holds ${r.creator.pct.toFixed(1)}% of supply.`);
+    else if (r.creator.pct >= 10) add(10, "creator_holds", `Creator wallet holds ${r.creator.pct.toFixed(1)}% of supply.`);
+  }
+
+  // --- look-alike characters and brand copying (on the name/symbol shown to buyers)
+  const label = `${r.metadata?.name || ""} ${r.metadata?.symbol || ""}`;
+  if (HOMOGLYPH.test(label) && LATIN.test(label)) {
+    add(35, "homoglyph", "Name/symbol mixes Latin letters with look-alike Cyrillic/Greek characters, a common impersonation trick.");
+  }
+  const squashed = label.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const brand = BRANDS.find((b) => squashed.includes(b));
+  if (brand && !OFFICIAL.has(r.mint) && !flags.some((f) => f.id === "impersonation")) {
+    add(15, "brand_copy", `Name/symbol contains "${brand}" but this is not an official ${brand} token.`);
+  }
+
+  if (OFFICIAL.has(r.mint)) {
+    // Official assets: controls are held by the issuer on purpose. Still worth knowing.
+    const sym = [...WELL_KNOWN].find(([, m]) => m === r.mint)?.[0];
+    const notes = flags.filter((f) => f.id !== "brand_copy" && f.id !== "impersonation").map((f) => `Issuer control: ${f.text}`);
+    return { score: 0, level: "KNOWN", flags: [], notes, positives: [`Official ${sym} mint (well-known asset).`, ...positives] };
+  }
+
+  const score = Math.min(100, flags.reduce((s, f) => s + f.points, 0));
+  const level = LEVELS.find(([min]) => score >= min)[1];
+  flags.sort((a, b) => b.points - a.points);
+  return { score, level, flags, notes: [], positives };
+}
+
+function short(k) {
+  return k ? `${k.slice(0, 4)}…${k.slice(-4)}` : "?";
+}

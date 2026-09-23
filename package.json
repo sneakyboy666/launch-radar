@@ -1,0 +1,14 @@
+{
+  "name": "launch-radar",
+  "version": "0.1.0",
+  "description": "Real-time Solana token launch safety radar powered by Solami (Blur, RPC, Mirage, webhooks).",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "bin": { "launch-radar": "src/cli.js" },
+  "scripts": {
+    "start": "node src/cli.js watch",
+    "check": "node src/cli.js check",
+    "test": "node --test test/"
+  }
+}
