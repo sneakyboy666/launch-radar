@@ -172,7 +172,7 @@ export class Radar extends EventEmitter {
       protocolTokens: this.counters.protocol,
       pctMintAuthority: pct("mint_authority"),
       pctFreezeAuthority: pct("freeze_authority"),
-      pctImpersonation: Math.round((100 * ((this.counters.flags.homoglyph || 0) + (this.counters.flags.brand_copy || 0) + (this.counters.flags.impersonation || 0))) / a),
+      pctImpersonation: Math.round((100 * ((this.counters.flags.homoglyph || 0) + (this.counters.flags.brand_copy || 0) + (this.counters.flags.impersonation || 0) + (this.counters.flags.bait || 0))) / a),
       pctToken2022Traps: Math.round((100 * ["permanent_delegate", "non_transferable", "default_frozen", "pausable", "transfer_hook", "transfer_fee"].reduce((s, id) => s + (this.counters.flags[id] || 0), 0)) / a),
       rpc: { requests: this.rpc.stats.requests, errors: this.rpc.stats.errors, retries: this.rpc.stats.retries, avgLatencyMs: this.rpc.avgLatencyMs() },
     };

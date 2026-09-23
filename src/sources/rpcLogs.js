@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { base58Encode, PROGRAMS } from "../solana.js";
+import { StallWatchdog, dropSocket } from "./watchdog.js";
 
 const CREATE_EVENT_DISC = createHash("sha256").update("event:CreateEvent").digest().subarray(0, 8);
 
@@ -58,6 +59,7 @@ export class RpcLogsLaunchSource extends EventEmitter {
   stop() {
     this.stopped = true;
     clearInterval(this.pinger);
+    this.dog?.stop();
     this.ws?.close();
   }
 
@@ -68,6 +70,12 @@ export class RpcLogsLaunchSource extends EventEmitter {
       this.attempt = 0;
       this.stats.connected = true;
       this.emit("status", { source: "rpc-logs", connected: true });
+      this.dog?.stop();
+      this.dog = new StallWatchdog(() => {
+        this.stats.stalls = (this.stats.stalls || 0) + 1;
+        this.emit("warning", { source: "rpc-logs", message: "stream went quiet, reconnecting" });
+        dropSocket(ws);
+      }).start();
       this.programs.forEach((program, i) => {
         ws.send(JSON.stringify({ jsonrpc: "2.0", id: i + 1, method: "logsSubscribe", params: [{ mentions: [program] }, { commitment: "confirmed" }] }));
       });
@@ -85,6 +93,7 @@ export class RpcLogsLaunchSource extends EventEmitter {
       } catch {
         return;
       }
+      if (msg?.method === "logsNotification") this.dog?.touch();
       const v = msg?.params?.result?.value;
       if (!v || v.err) return;
       const logs = v.logs || [];
@@ -103,6 +112,7 @@ export class RpcLogsLaunchSource extends EventEmitter {
     ws.onclose = () => {
       this.stats.connected = false;
       clearInterval(this.pinger);
+      this.dog?.stop();
       this.emit("status", { source: "rpc-logs", connected: false });
       if (this.stopped) return;
       this.stats.reconnects++;

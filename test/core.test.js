@@ -151,3 +151,39 @@ test("program-held powers are discounted and mark the token as protocol-issued",
   const mixed = scoreReport(clean({ ...base, authorities: { ...authorities, freeze_authority: WALLET }, token: { ...base.token, freezeAuthority: WALLET }, controllers: { [MARKET_PDA]: { kind: "program", program: MARKET_PROGRAM }, [WALLET]: { kind: "wallet", program: null } } }));
   assert.equal(mixed.category, "launch");
 });
+
+test("stall watchdog drops a quiet socket once and runs its close handler immediately", async () => {
+  const { StallWatchdog, dropSocket } = await import("../src/sources/watchdog.js");
+  let closes = 0;
+  let closed = false;
+  const ws = { onclose: () => closes++, onmessage: () => {}, close: () => (closed = true) };
+  const dog = new StallWatchdog(() => dropSocket(ws), 30).start();
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal(closes, 1);
+  assert.ok(closed);
+  assert.equal(ws.onclose, null, "late close events from the old socket are ignored");
+  // A stream that keeps talking is left alone.
+  let stalls = 0;
+  const alive = new StallWatchdog(() => stalls++, 60).start();
+  const keep = setInterval(() => alive.touch(), 10);
+  await new Promise((r) => setTimeout(r, 200));
+  clearInterval(keep);
+  alive.stop();
+  assert.equal(stalls, 0);
+});
+
+test("homoglyphs only count inside a single mixed-script word", () => {
+  const name = (n, s) => scoreReport(clean({ metadata: { name: n, symbol: s, isMutable: false } }));
+  assert.ok(ids(name("MultiPаir", "MultiPаir")).includes("homoglyph")); // Cyrillic а, seen live
+  assert.ok(ids(name("musеboоk", "MUSЕBOOK")).includes("homoglyph"));
+  assert.ok(!ids(name("ΛΥΣΙΟΣ", "LYSIOS")).includes("homoglyph")); // Greek name, Latin ticker: fine
+});
+
+test("giveaway and link lures are flagged as bait", () => {
+  const name = (n, s = "X") => scoreReport(clean({ metadata: { name: n, symbol: s, isMutable: false } }));
+  assert.equal(name("1 SOL GIVEAWAY EVERY", "FREE 1 SOL").flags[0].id, "bait"); // seen live, 15x from one wallet
+  assert.equal(name("Claim at solana-drop.xyz").flags[0].points, 25);
+  assert.equal(name("t.me/moonchat").flags[0].points, 25);
+  assert.deepEqual(ids(name("Free Bird", "BIRD")), []);
+  assert.deepEqual(ids(name("Cat in a Hat", "HAT")), []);
+});

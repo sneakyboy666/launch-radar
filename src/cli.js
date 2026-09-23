@@ -64,7 +64,10 @@ function watch() {
     sources.blur.on("launch", (l) => radar.onLaunch(l));
     sources.blur.on("trade", (t) => radar.onTrade(t));
   }
-  for (const s of Object.values(sources)) s.on("status", (st) => console.log(`${C.dim}[${st.source}] ${st.connected ? "connected" : "disconnected, retrying"}${C.reset}`));
+  for (const s of Object.values(sources)) {
+    s.on("status", (st) => console.log(`${C.dim}[${st.source}] ${st.connected ? "connected" : "disconnected, retrying"}${C.reset}`));
+    s.on("warning", (w) => console.log(`${C.dim}[${w.source}] ${w.message}${C.reset}`));
+  }
 
   radar.on("update", (v) => {
     if (v.status !== "done") return;

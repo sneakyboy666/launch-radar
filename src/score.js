@@ -23,9 +23,15 @@ const OFFICIAL = new Set([...WELL_KNOWN.values()]);
 // Brands and liquid-staking tokens that scammers copy by name.
 const BRANDS = ["USDC", "USDT", "PYUSD", "JITOSOL", "MSOL", "BSOL", "JUPSOL", "EDGESOL", "PHANTOM", "BINANCE", "COINBASE", "TETHER"];
 
-// Latin look-alikes from Cyrillic and Greek, used to fake names like "BITCОIN".
+// Latin look-alikes from Cyrillic and Greek, used to fake names like "BITCОIN". Only a word that
+// mixes scripts counts: an all-Greek name with a Latin ticker ("ΛΥΣΙΟΣ" / "LYSIOS") is fine.
 const HOMOGLYPH = /[\u0400-\u04FF\u0370-\u03FF]/;
 const LATIN = /[A-Za-z]/;
+export const mixesScripts = (label) => label.split(/[^\p{L}\p{N}]+/u).some((w) => HOMOGLYPH.test(w) && LATIN.test(w));
+
+// Lures: tokens named like a giveaway or carrying a link, used to send people to wallet drainers.
+const BAIT_WORDS = /\bGIVE\s?AWAYS?\b|\bFREE\s*\d*\s*(SOL|USDC|USDT|CRYPTO|MONEY|TOKENS?)\b|\bAIRDROP\b|\bCLAIM\b/i;
+const BAIT_LINK = /https?:\/\/|www\.|t\.me\/|\b[a-z0-9-]{2,}\.(com|io|xyz|app|net|org|gg|site|online|live|vip)\b/i;
 
 // Powers held by a program address count for less than powers held by a personal wallet.
 const PROGRAM_DISCOUNT = 0.4;
@@ -97,7 +103,7 @@ export function scoreReport(r, ctx = {}) {
 
   // --- look-alike characters and brand copying (on the name/symbol shown to buyers)
   const label = `${r.metadata?.name || ""} ${r.metadata?.symbol || ""}`;
-  if (HOMOGLYPH.test(label) && LATIN.test(label)) {
+  if (mixesScripts(label)) {
     add(35, "homoglyph", "Name/symbol mixes Latin letters with look-alike Cyrillic/Greek characters, a common impersonation trick.");
   }
   const squashed = label.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -105,6 +111,9 @@ export function scoreReport(r, ctx = {}) {
   if (brand && !OFFICIAL.has(r.mint) && !flags.some((f) => f.id === "impersonation")) {
     add(15, "brand_copy", `Name/symbol contains "${brand}" but this is not an official ${brand} token.`);
   }
+
+  if (BAIT_LINK.test(label)) add(25, "bait", "Name/symbol contains a link: a common lure to phishing or wallet-drainer sites.");
+  else if (BAIT_WORDS.test(label)) add(20, "bait", "Name/symbol promises free money (giveaway/airdrop/claim), a common lure to wallet-drainer sites.");
 
   // --- behaviour seen by the radar itself (only available in live mode)
   if (ctx.creatorLaunches >= 3) add(25, "serial_launcher", `Creator wallet launched ${ctx.creatorLaunches} tokens in the last hour (serial launcher).`);

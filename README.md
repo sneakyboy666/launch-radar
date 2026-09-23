@@ -33,7 +33,8 @@ seconds, and explains the risk in plain English.
 | Token-2022 transfer hook / transfer fee (+ fee authority) | mint extensions | Sells can be blocked or taxed, and fees raised later |
 | Mutable metadata | Metaplex metadata PDA (derived locally) or Token-2022 metadata | Name/logo can be swapped after launch |
 | Impersonation | symbol vs. official mints, brand list | "USDC" that isn't USDC |
-| Homoglyphs | Unicode script check | "BITCОIN" spelled with a Cyrillic О |
+| Homoglyphs | Unicode script check, per word | "BITCОIN" spelled with a Cyrillic О (live catches: "MultiPаir", "musеboоk") |
+| Bait | giveaway/airdrop wording, links in the name | "FREE 1 SOL / GIVEAWAY" tokens that lure people to wallet drainers |
 | Whale concentration | `getTokenLargestAccounts` + owner programs | Pools/bonding curves are recognized and excluded |
 | Creator holdings | earliest signature's fee payer | How much the deployer still holds |
 | Who holds each power | ed25519 on-curve check + owner program lookup | A permanent delegate in a *wallet* is a trap; in a *program address* (PDA) it's usually a protocol (prediction-market shares, vault/LP tokens) |
@@ -50,6 +51,13 @@ scanner flags all of them CRITICAL. Launch Radar checks whether each authority i
 curve (a key someone holds) or off it (only a program can sign), looks up the owning program,
 discounts program-held powers, labels the token **protocol**, and keeps them out of the scam
 statistics and alerts. Same powers in a personal wallet stay CRITICAL.
+
+### Reliability
+
+A 10-minute soak test on mainnet analyzed 354 launches with 0 failures and 0 RPC errors while the
+trap watch processed ~660k Token-2022 log messages. Every stream has a stall watchdog: if a
+socket stays open but goes quiet for 60 s (seen on the public RPC), it is dropped and
+reconnected with backoff.
 
 ## How it uses Solami
 

@@ -17,7 +17,10 @@ read smart-contract settings, and scammers know it. Common traps:
    letter О that looks identical.
 5. **Concentration**: one wallet holding most of the supply (after excluding the pool itself).
 6. **Serial launchers and copycats**: the same wallet launching token after token, or ten copies
-   of whatever name is trending.
+   of whatever name is trending. (Live example: one wallet launched 15 "FREE 1 SOL / 1 SOL
+   GIVEAWAY" tokens in 5 minutes.)
+7. **Bait**: names promising free money or containing a link, which lure people to fake "claim"
+   sites that drain wallets.
 
 ## How it catches new tokens (the "sources")
 - **Pump.fun feed**: we subscribe to Pump.fun's program logs over a WebSocket. When a token is

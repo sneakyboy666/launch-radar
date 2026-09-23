@@ -8,6 +8,7 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { isValidPubkey } from "../solana.js";
+import { StallWatchdog, dropSocket } from "./watchdog.js";
 
 const pick = (o, ...keys) => {
   for (const k of keys) if (o?.[k] !== undefined && o[k] !== null) return o[k];
@@ -73,6 +74,7 @@ export class SolamiBlurSource extends EventEmitter {
 
   stop() {
     this.stopped = true;
+    this.dog?.stop();
     this.ws?.close();
   }
 
@@ -90,11 +92,18 @@ export class SolamiBlurSource extends EventEmitter {
       this.attempt = 0;
       this.stats.connected = true;
       this.emit("status", { source: "solami-blur", connected: true });
+      this.dog?.stop();
+      this.dog = new StallWatchdog(() => {
+        this.stats.stalls = (this.stats.stalls || 0) + 1;
+        this.emit("warning", { source: "solami-blur", message: "stream went quiet, reconnecting" });
+        dropSocket(ws);
+      }).start();
       for (const sub of this.subscriptions) ws.send(JSON.stringify(sub));
     };
     ws.onmessage = (ev) => {
       this.stats.messages++;
       this.stats.lastMessageAt = Date.now();
+      this.dog?.touch();
       const text = typeof ev.data === "string" ? ev.data : Buffer.from(ev.data).toString("utf8");
       this.#record(text);
       let msg;
@@ -117,6 +126,7 @@ export class SolamiBlurSource extends EventEmitter {
     ws.onerror = () => {};
     ws.onclose = () => {
       this.stats.connected = false;
+      this.dog?.stop();
       this.emit("status", { source: "solami-blur", connected: false });
       if (this.stopped) return;
       this.stats.reconnects++;

@@ -4,6 +4,7 @@
 // risky mints cost an extra RPC call (getTransaction) to find the mint address.
 import { EventEmitter } from "node:events";
 import { PROGRAMS } from "../solana.js";
+import { StallWatchdog, dropSocket } from "./watchdog.js";
 
 export const RISKY_INIT = {
   InitializePermanentDelegate: "permanent delegate",
@@ -52,6 +53,7 @@ export class Token2022TrapWatch extends EventEmitter {
 
   stop() {
     this.stopped = true;
+    this.dog?.stop();
     this.ws?.close();
   }
 
@@ -78,11 +80,18 @@ export class Token2022TrapWatch extends EventEmitter {
       this.attempt = 0;
       this.stats.connected = true;
       this.emit("status", { source: "token2022-traps", connected: true });
+      this.dog?.stop();
+      this.dog = new StallWatchdog(() => {
+        this.stats.stalls = (this.stats.stalls || 0) + 1;
+        this.emit("warning", { source: "token2022-traps", message: "stream went quiet, reconnecting" });
+        dropSocket(ws);
+      }).start();
       ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "logsSubscribe", params: [{ mentions: [PROGRAMS.TOKEN_2022] }, { commitment: "confirmed" }] }));
     };
     ws.onmessage = (ev) => {
       this.stats.messages++;
       this.stats.lastMessageAt = Date.now();
+      this.dog?.touch();
       const text = typeof ev.data === "string" ? ev.data : "";
       if (!text.includes("InitializeMint")) return; // cheap pre-filter before JSON.parse
       let v;
@@ -102,6 +111,7 @@ export class Token2022TrapWatch extends EventEmitter {
     ws.onerror = () => {};
     ws.onclose = () => {
       this.stats.connected = false;
+      this.dog?.stop();
       this.emit("status", { source: "token2022-traps", connected: false });
       if (this.stopped) return;
       this.stats.reconnects++;

@@ -78,7 +78,7 @@ footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
     <button data-f="all" class="active">All</button>
     <button data-f="risky">High + Critical</button>
     <button data-f="traps">Token-2022 traps</button>
-    <button data-f="imp">Impersonation</button>
+    <button data-f="imp">Impersonation + bait</button>
     <button data-f="protocol">Protocol tokens</button>
     <input id="q" placeholder="Filter by symbol, name or mint…" aria-label="Filter">
   </div>
@@ -107,7 +107,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? s + "s" : Math.round(s / 60) + "m"; };
 const TRAPS = new Set(["permanent_delegate", "non_transferable", "default_frozen", "pausable", "transfer_hook", "transfer_fee"]);
-const IMP = new Set(["homoglyph", "brand_copy", "impersonation"]);
+const IMP = new Set(["homoglyph", "brand_copy", "impersonation", "bait"]);
 
 function matches(t) {
   const q = $("q").value.trim().toLowerCase();
@@ -176,7 +176,7 @@ function renderStatus(s) {
     card("Analyzed", m.analyzed),
     card("High + critical", m.byLevel.HIGH + m.byLevel.CRITICAL),
     card("Mint auth. active", m.pctMintAuthority + "%"),
-    card("Impersonation", m.pctImpersonation + "%"),
+    card("Impersonation + bait", m.pctImpersonation + "%"),
     card("T22 traps caught", (src.traps?.riskyMints ?? 0)),
     card("New T22 mints seen", (src.traps?.newMints ?? 0)),
     card("Protocol tokens", m.protocolTokens ?? 0),
