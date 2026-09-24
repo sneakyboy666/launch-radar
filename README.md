@@ -11,8 +11,8 @@ copies of the same coin in an hour.
 Launch Radar watches mainnet as tokens are created, checks each one on-chain within
 seconds, and explains the risk in plain English.
 
-**Videos:** [90-second live demo](https://github.com/sneakyboy666/launch-radar/releases/download/v0.1.0/demo.mp4) ·
-[2-minute pitch](https://github.com/sneakyboy666/launch-radar/releases/download/v0.1.0/pitch.mp4)
+**Videos:** [2.5-minute live demo](https://youtu.be/z-sno935awo) ·
+[2-minute pitch](https://youtu.be/ucMbo0HFogo)
 (recorded from the live dashboard on mainnet; nothing staged)
 
 - **Live feed:** Pump.fun launches (decoded straight from program logs) plus every new

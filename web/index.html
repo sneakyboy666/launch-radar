@@ -108,8 +108,12 @@ let selected = null;
 const $ = (id) => document.getElementById(id);
 // Anyone can name a token anything. Slurs are masked on screen (add ?raw=1 to the URL to see raw names).
 const SLURS = /n[i1!]gg|f[a@4]gg?[o0]t|k[i1]ke\b|ch[i1]nk|sp[i1]c\b|tr[a@]nn(y|ie)|retard|wetback|coon\b|beaner/i;
-const RAW = new URLSearchParams(location.search).has("raw");
-const clean = (s) => (!RAW && SLURS.test(String(s ?? "")) ? "(name hidden)" : s);
+// ?clean=1 also hides profanity (for screen recordings and demos).
+const PROFANITY = /f+u+c+k|sh[i1]t|b[i1]tch|cunt|\bdick|puss(y|ies)|porn|\bcum\b|nazi|hitler|\bsex/i;
+const QS = new URLSearchParams(location.search);
+const RAW = QS.has("raw");
+const CLEAN = QS.has("clean");
+const clean = (s) => (!RAW && (SLURS.test(String(s ?? "")) || (CLEAN && PROFANITY.test(String(s ?? "")))) ? "(name hidden)" : s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? s + "s" : Math.round(s / 60) + "m"; };
 const TRAPS = new Set(["permanent_delegate", "non_transferable", "default_frozen", "pausable", "transfer_hook", "transfer_fee"]);
