@@ -1,4 +1,4 @@
-# How Launch Radar works (plain English, for the builder to explain)
+# How Launch Radar works (plain English)
 
 ## The one-sentence pitch
 Launch Radar watches every new Solana token the moment it's created, checks it on-chain for the
@@ -64,8 +64,8 @@ We check. For every token we remember the level we gave it at launch (before any
 watch whether its creator sells at least half their tokens. The dashboard shows the dump rate for
 tokens we flagged versus tokens we scored clean. If the flags mean something, the first number is
 much higher, and it is. In a 10-minute live run: 82% of flagged tokens were dumped by their
-creator within minutes, against 50% of clean ones (60% of all Pump.fun launches). Be honest about
-that 50%: most memecoin creators sell fast, so "clean" never means "safe".
+creator within minutes, against 50% of clean ones (60% of all Pump.fun launches). That 50% matters
+too: most memecoin creators sell fast, so "clean" never means "safe".
 
 ## Why Solami matters here
 - Full analysis of every launch needs lots of requests quickly; Solami Pro gives 200 requests/sec.
