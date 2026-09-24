@@ -25,6 +25,8 @@ export function loadConfig() {
     usingSolami: Boolean(key),
     rpcUrl: env.RPC_URL || (key ? `https://rpc.solami.dev/sol?${q}` : "https://api.mainnet-beta.solana.com"),
     wsUrl: env.WS_URL || (key ? `wss://rpc.solami.dev/ws/sol?${q}` : "wss://api.mainnet-beta.solana.com"),
+    // Program-log streams fall back to the public Solana WebSocket when the key's plan has no WS.
+    wsFallbackUrl: env.WS_URL ? null : key ? "wss://api.mainnet-beta.solana.com" : null,
     blurUrl: env.BLUR_WS_URL || (key ? `wss://ws.solami.dev/data/subscribe?chain=solana&${q}` : ""),
     dataApi: env.SOLAMI_DATA_API || "https://api.solami.dev",
     host: env.HOST || "127.0.0.1",
@@ -33,6 +35,7 @@ export function loadConfig() {
     alertLevel: (env.ALERT_LEVEL || "HIGH").toUpperCase(),
     // Public RPC can't keep up with full analysis of every launch; Solami Pro can (200 rps).
     lightMode: env.LIGHT_MODE ? env.LIGHT_MODE === "1" : !key,
+    flowSource: key ? "solami-blur" : null, // Blur has USD volume on every DEX; else Pump.fun logs
     concurrency: Number(env.CONCURRENCY || (key ? 8 : 1)),
     minIntervalMs: Number(env.MIN_INTERVAL_MS || (key ? 0 : 250)),
     maxQueue: Number(env.MAX_QUEUE || 50),

@@ -113,7 +113,7 @@ export async function classifyControllers(rpc, addresses) {
 }
 
 // ---------------------------------------------------------------- analysis
-export async function analyzeToken(rpc, mint, { withCreator = true, withHolders = true } = {}) {
+export async function analyzeToken(rpc, mint, { withCreator = true, withHolders = true, knownCreator = null } = {}) {
   const started = Date.now();
   const report = { mint, checkedAt: new Date().toISOString(), errors: [] };
 
@@ -159,10 +159,12 @@ export async function analyzeToken(rpc, mint, { withCreator = true, withHolders 
   if (withHolders) try {
     const largest = await rpc.call("getTokenLargestAccounts", [mint, { commitment: "confirmed" }]);
     const accounts = (largest?.value || []).filter((a) => BigInt(a.amount) > 0n);
+    // Owner = bytes 32..64 of any SPL / Token-2022 token account. Read raw so it works on every
+    // RPC (some don't return jsonParsed from getMultipleAccounts).
     const tokenAccs = accounts.length
-      ? await rpc.call("getMultipleAccounts", [accounts.map((a) => a.address), { encoding: "jsonParsed", commitment: "confirmed" }])
+      ? await rpc.call("getMultipleAccounts", [accounts.map((a) => a.address), { encoding: "base64", dataSlice: { offset: 32, length: 32 }, commitment: "confirmed" }])
       : { value: [] };
-    const owners = tokenAccs.value.map((v) => v?.data?.parsed?.info?.owner ?? null);
+    const owners = tokenAccs.value.map((v) => (v?.data?.[0] ? base58Encode(Buffer.from(v.data[0], "base64")) : null));
     const ownerAccs = owners.filter(Boolean).length
       ? await rpc.call("getMultipleAccounts", [owners.map((o) => o || PROGRAMS.TOKEN), { encoding: "base64", commitment: "confirmed" }])
       : { value: [] };
@@ -170,7 +172,13 @@ export async function analyzeToken(rpc, mint, { withCreator = true, withHolders 
     report.holders = accounts.map((a, i) => {
       const owner = owners[i];
       const ownerProgram = ownerAccs.value[i]?.owner ?? null;
-      const poolLabel = KNOWN_POOL_WALLETS.get(owner) || POOL_PROGRAMS.get(ownerProgram) || null;
+      // Owners off the ed25519 curve are program addresses (curves, pool vaults, launchpad
+      // agents): no person holds a key, so they don't count as whales.
+      let pda = false;
+      try {
+        pda = Boolean(owner) && !isOnCurve(base58Decode(owner));
+      } catch {}
+      const poolLabel = KNOWN_POOL_WALLETS.get(owner) || POOL_PROGRAMS.get(ownerProgram) || (pda ? "program account" : null);
       return {
         tokenAccount: a.address,
         owner,
@@ -183,22 +191,37 @@ export async function analyzeToken(rpc, mint, { withCreator = true, withHolders 
     report.errors.push(`holders: ${e.message}`);
   }
 
-  // Creator: fee payer of the earliest transaction touching the mint (cheap for new tokens).
-  if (withCreator) {
+  // Creator: known from the launch event when we saw it launch; otherwise the fee payer of the
+  // earliest transaction touching the mint. Paged 100 at a time (some RPCs stall on limit 1000);
+  // a mint with more than 500 transactions is not a new launch, so we stop there.
+  if (knownCreator) {
+    report.creator = { address: knownCreator, source: "launch event" };
+  } else if (withCreator) {
     try {
-      const sigs = await rpc.call("getSignaturesForAddress", [mint, { limit: 1000, commitment: "confirmed" }]);
-      if (sigs.length && sigs.length < 1000) {
-        const first = sigs[sigs.length - 1];
-        const tx = await rpc.call("getTransaction", [first.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }]);
-        const payer = tx?.transaction?.message?.accountKeys?.find((k) => k.signer)?.pubkey ?? null;
-        report.creator = { address: payer, firstSignature: first.signature, createdAt: first.blockTime ? new Date(first.blockTime * 1000).toISOString() : null, txCount: sigs.length };
-        if (payer && report.holders) {
-          report.creator.pct = report.holders.filter((h) => h.owner === payer).reduce((s, h) => s + h.pct, 0);
+      let before;
+      let oldest = null;
+      let count = 0;
+      for (let page = 0; page < 5; page++) {
+        const sigs = await rpc.call("getSignaturesForAddress", [mint, { limit: 100, before, commitment: "confirmed" }]);
+        count += sigs.length;
+        if (sigs.length) oldest = sigs[sigs.length - 1];
+        if (sigs.length < 100) {
+          before = null;
+          break;
         }
+        before = oldest.signature;
+      }
+      if (oldest && !before) {
+        const tx = await rpc.call("getTransaction", [oldest.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]);
+        const payer = tx?.transaction?.message?.accountKeys?.find((k) => k.signer)?.pubkey ?? null;
+        report.creator = { address: payer, firstSignature: oldest.signature, createdAt: oldest.blockTime ? new Date(oldest.blockTime * 1000).toISOString() : null, txCount: count, source: "first transaction" };
       }
     } catch (e) {
       report.errors.push(`creator: ${e.message}`);
     }
+  }
+  if (report.creator?.address && report.holders) {
+    report.creator.pct = report.holders.filter((h) => h.owner === report.creator.address).reduce((s, h) => s + h.pct, 0);
   }
 
   report.ms = Date.now() - started;

@@ -130,7 +130,23 @@ export class Rpc {
     this.queue = [];
     this.lastStart = 0;
     this.id = 0;
-    this.stats = { requests: 0, errors: 0, retries: 0, totalLatencyMs: 0 };
+    this.baseIntervalMs = minIntervalMs;
+    this.okStreak = 0;
+    this.stats = { requests: 0, errors: 0, retries: 0, throttled: 0, totalLatencyMs: 0, lastError: null };
+  }
+
+  // Adaptive pacing: plans differ (Solami Free is 5 req/s, Pro 200), so back off on HTTP 429
+  // and creep back toward full speed after a run of successes.
+  #throttle(retryAfterSec) {
+    this.stats.throttled++;
+    this.okStreak = 0;
+    this.minIntervalMs = Math.min(2000, Math.max(this.minIntervalMs * 2, 220, (retryAfterSec || 0) * 1000));
+  }
+  #ok() {
+    if (++this.okStreak >= 40 && this.minIntervalMs > this.baseIntervalMs) {
+      this.minIntervalMs = Math.max(this.baseIntervalMs, Math.floor(this.minIntervalMs * 0.8));
+      this.okStreak = 0;
+    }
   }
 
   async #slot() {
@@ -159,15 +175,19 @@ export class Rpc {
         });
         this.stats.requests++;
         this.stats.totalLatencyMs += Date.now() - started;
+        if (res.status === 429) this.#throttle(Number(res.headers.get("retry-after")) || 0);
         if (res.status === 429 || res.status >= 500) throw Object.assign(new Error(`HTTP ${res.status}`), { retryable: true });
         const body = await res.json();
         if (body.error) {
           const retryable = body.error.code === -32005 || /rate|limit|busy/i.test(body.error.message || "");
+          if (retryable) this.#throttle(0);
           throw Object.assign(new Error(`${method}: ${body.error.message}`), { retryable, code: body.error.code });
         }
+        this.#ok();
         return body.result;
       } catch (err) {
         this.stats.errors++;
+        this.stats.lastError = err.message;
         const retryable = err.retryable || err.name === "TimeoutError" || err.name === "TypeError";
         if (!retryable || attempt >= retries) throw err;
         this.stats.retries++;
@@ -176,6 +196,10 @@ export class Rpc {
         this.#release();
       }
     }
+  }
+
+  intervalMs() {
+    return this.minIntervalMs;
   }
 
   avgLatencyMs() {

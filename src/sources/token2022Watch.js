@@ -35,9 +35,11 @@ export function mintsFromParsedTx(tx) {
 }
 
 export class Token2022TrapWatch extends EventEmitter {
-  constructor(wsUrl, rpc) {
+  constructor(wsUrl, rpc, { fallbackUrl = null } = {}) {
     super();
     this.wsUrl = wsUrl;
+    this.fallbackUrl = fallbackUrl;
+    this.failedOpens = 0;
     this.rpc = rpc;
     this.stopped = false;
     this.attempt = 0;
@@ -59,12 +61,12 @@ export class Token2022TrapWatch extends EventEmitter {
 
   async #resolve(signature, extensions, slot) {
     try {
-      const tx = await this.rpc.call("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }]);
+      const tx = await this.rpc.call("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]);
       const creator = tx?.transaction?.message?.accountKeys?.find((k) => k.signer)?.pubkey ?? null;
       for (const mint of mintsFromParsedTx(tx)) {
         if (this.seen.has(mint)) continue;
         this.seen.add(mint);
-        this.emit("launch", { mint, name: "", symbol: "", creator, source: `token-2022: ${extensions.join(", ")}`, signature, slot, seenAt: Date.now() });
+        this.emit("launch", { mint, name: "", symbol: "", creator, source: `token-2022: ${extensions.join(", ")}`, dex: "token-2022", signature, slot, seenAt: Date.now() });
       }
     } catch (e) {
       // Never emit "error": an EventEmitter with no listener would crash the process.
@@ -97,7 +99,10 @@ export class Token2022TrapWatch extends EventEmitter {
   #connect() {
     const ws = new WebSocket(this.wsUrl);
     this.ws = ws;
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
+      this.failedOpens = 0;
       this.attempt = 0;
       this.stats.connected = true;
       this.emit("status", { source: "token2022-traps", connected: true });
@@ -122,6 +127,12 @@ export class Token2022TrapWatch extends EventEmitter {
       this.dog?.stop();
       this.emit("status", { source: "token2022-traps", connected: false });
       if (this.stopped) return;
+      // Plans without WebSocket access (e.g. Solami Free) refuse the upgrade: use the fallback.
+      if (!opened && ++this.failedOpens >= 2 && this.fallbackUrl && this.wsUrl !== this.fallbackUrl) {
+        this.wsUrl = this.fallbackUrl;
+        this.attempt = 0;
+        this.emit("warning", { source: "token2022-traps", message: "WebSocket refused (plan without WS access?); switching to the fallback endpoint" });
+      }
       this.stats.reconnects++;
       setTimeout(() => this.#connect(), Math.min(30000, 1000 * 2 ** this.attempt++));
     };

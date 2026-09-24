@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { base58Decode, base58Encode, isOnCurve, metadataPda } from "../src/solana.js";
-import { authorityAddresses, classifyControllers, parseMetaplexMetadata, summarizeMint } from "../src/token.js";
+import { readFileSync } from "node:fs";
+import { base58Decode, base58Encode, isOnCurve, metadataPda, Rpc } from "../src/solana.js";
+import { createServer } from "node:http";
+import { analyzeToken, authorityAddresses, classifyControllers, parseMetaplexMetadata, summarizeMint } from "../src/token.js";
 import { scoreReport } from "../src/score.js";
 import { decodePumpCreateEvent, decodePumpTradeEvent } from "../src/sources/rpcLogs.js";
 import { riskyExtensionsInLogs, mintsFromParsedTx } from "../src/sources/token2022Watch.js";
@@ -106,11 +108,30 @@ test("Token-2022 trap watch spots risky extension inits and extracts the mint", 
   assert.deepEqual(mintsFromParsedTx(tx), [USDC]);
 });
 
-test("Blur normalizer accepts several field spellings", () => {
-  assert.equal(normalizeBlurEvent({ type: "swap", mint: USDC, side: "BUY", volume_usd: "12.5" }).usd, 12.5);
-  assert.equal(normalizeBlurEvent({ event: "trade", token_address: USDC, is_buy: false }).side, "sell");
-  assert.equal(normalizeBlurEvent({ type: "new_token", base_mint: USDC, token_symbol: "X" }).type, "launch");
+// Real Solami Blur frames captured from mainnet (test/fixtures/blur.json).
+const BLUR = JSON.parse(readFileSync(new URL("./fixtures/blur.json", import.meta.url), "utf8"));
+
+test("Blur normalizer maps real frames", () => {
+  const swap = normalizeBlurEvent(BLUR.swap);
+  assert.equal(swap.type, "trade");
+  assert.ok(["buy", "sell"].includes(swap.side));
+  assert.ok(swap.usd > 0 && typeof swap.tokens === "bigint" && swap.sol > 0 && swap.mcapUsd > 0);
+  assert.equal(swap.wallet, BLUR.swap.trader);
+  const launch = normalizeBlurEvent(BLUR.token_create);
+  assert.equal(launch.type, "launch");
+  assert.equal(launch.creator, BLUR.token_create.creator);
+  assert.match(launch.source, /^solami: /);
+  const tr = normalizeBlurEvent(BLUR.transfer);
+  assert.equal(tr.type, "transfer");
+  assert.equal(typeof tr.amount, "bigint");
+  const lq = normalizeBlurEvent(BLUR.liquidity);
+  assert.equal(lq.mint, BLUR.liquidity.base_mint);
+  assert.ok(["add", "remove"].includes(lq.kind) && lq.usd > 0);
+  assert.equal(normalizeBlurEvent(BLUR.token_update).type, "market");
+  assert.equal(normalizeBlurEvent({ type: "movers", rows: [] }), null);
   assert.equal(normalizeBlurEvent({ type: "swap", mint: "not-a-key" }), null);
+  // Fractional values are decimal strings; raw amounts may be strings too.
+  assert.equal(normalizeBlurEvent({ type: "transfer", mint: USDC, amount: "18446744073709551615" }).amount, 18446744073709551615n);
 });
 
 // Real mainnet case: "BTC Up" prediction-market share (6Y6MDqMj…). Mint authority, permanent
@@ -250,4 +271,99 @@ test("creator dumps are caught even when another source feeds the flow numbers",
   assert.equal(v.flow.source, "solami-blur");
   assert.equal(v.creatorSoldPct, 90);
   assert.equal(radar.metrics().creatorDumps, 1);
+});
+
+test("Blur-only signals: creator transfers out, liquidity pulled, graduation, surge", () => {
+  const rpc = { stats: { requests: 0, errors: 0, retries: 0 }, avgLatencyMs: () => 0 };
+  const radar = new Radar(rpc, { lightMode: true, concurrency: 1, maxQueue: 10, analyzeDelayMs: 0, alertLevel: "HIGH", flowSource: "solami-blur" });
+  const alerts = [];
+  radar.on("alert", (v) => alerts.push(v));
+  const mint = "Fake3333333333333333333333333333333333333333";
+  const dev = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+  const curve = "EvRBeUoj2bsmWbgFU9gE8ywfeD6FnLdWen4pPKsZfNNu";
+  const other = "BuyerWallet11111111111111111111111111111111";
+  radar.onLaunch({ mint, name: "Moon", symbol: "MOON", creator: dev, pool: curve, source: "solami: pumpfun", dex: "pumpfun", seenAt: Date.now() });
+  const entry = radar.tokens.get(mint);
+  entry.report = { mint, token: { mintAuthority: null, freezeAuthority: null, extensions: {} }, metadata: { name: "Moon", symbol: "MOON", isMutable: false }, errors: [] };
+  entry.ctx = {};
+  entry.status = "done";
+  entry.risk = scoreReport(entry.report);
+  // Same dev buy reported by both sources: counted once. Flow comes from Blur only.
+  radar.onTrade({ mint, side: "buy", tokens: 1000n, sol: 1, wallet: dev, signature: "S1", source: "pump.fun" });
+  radar.onTrade({ mint, side: "buy", tokens: 1000n, usd: 150, wallet: dev, signature: "S1", source: "solami-blur" });
+  assert.equal(entry.dev.bought, 1000n);
+  assert.equal(radar.view(entry).flow.buys, 1);
+  assert.equal(radar.view(entry).flow.buyUsd, 150);
+  // Tokens into the bonding curve are a sell, not a transfer; tokens to another wallet are.
+  radar.onTransfer({ mint, kind: "transfer", from: dev, to: curve, amount: 900n, signature: "S2" });
+  assert.equal(entry.dev.movedOut, 0n);
+  radar.onTransfer({ mint, kind: "transfer", from: dev, to: other, amount: 600n, signature: "S3" });
+  radar.onTransfer({ mint, kind: "transfer", from: dev, to: other, amount: 600n, signature: "S3" }); // duplicate frame
+  let v = radar.view(entry);
+  assert.equal(v.creatorMovedPct, 60);
+  assert.ok(v.flags.some((f) => f.id === "creator_transfer" && f.points === 20));
+  // Creator pulls liquidity: strongest rug signal, raises the level and alerts.
+  radar.onLiquidity({ mint, kind: "remove", provider: dev, usd: 4200, pool: "Pool1111111111111111111111111111111111111111" });
+  v = radar.view(entry);
+  assert.ok(v.flags.some((f) => f.id === "liquidity_pulled" && /\$4,200/.test(f.text)));
+  assert.equal(v.level, "HIGH");
+  assert.equal(alerts.length, 1);
+  radar.onGraduation({ mint, launchpad: "pumpfun", dex: "pumpswap", pool: "Pool2222222222222222222222222222222222222222" });
+  radar.onSurge({ mint, multiple: 4, volumeUsd: 12000, windowSecs: 300 });
+  v = radar.view(entry);
+  assert.ok(v.notes.some((n) => /Graduated from pumpfun to a pumpswap pool/.test(n)));
+  assert.ok(v.notes.some((n) => /Volume surge: 4x/.test(n)));
+  const m = radar.metrics();
+  assert.deepEqual([m.creatorTransfers, m.liquidityPulls, m.graduations, m.surges], [1, 1, 1, 1]);
+  assert.equal(m.byLaunchpad.pumpfun, 1);
+  assert.deepEqual(radar.trackedMints(), [mint]);
+});
+
+test("RPC client backs off on HTTP 429 and still returns the result", async () => {
+  let hits = 0;
+  const server = createServer((req, res) => {
+    hits++;
+    if (hits <= 2) {
+      res.writeHead(429, { "retry-after": "0" });
+      return res.end();
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: 42 }));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const rpc = new Rpc(`http://127.0.0.1:${server.address().port}`, { minIntervalMs: 0 });
+  try {
+    assert.equal(await rpc.call("getSlot"), 42);
+    assert.equal(rpc.stats.throttled, 2);
+    assert.ok(rpc.intervalMs() >= 220, "paces itself below the plan's limit after a 429");
+  } finally {
+    server.close();
+  }
+});
+
+test("holders: owners read from raw bytes; program accounts (PDAs) are not whales", async () => {
+  // Mimics an RPC that returns base64 only (no jsonParsed) from getMultipleAccounts.
+  const T22 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+  const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+  const curve = "HVTvkZY9jrT5kGJwt6eANVG8MG4ZvnumDqt4GSXWMa5i"; // owned by Pump.fun
+  const agentPda = MARKET_PDA; // off-curve, owned by the System Program
+  const person = WALLET; // on-curve
+  const owners = { TA1: agentPda, TA2: curve, TA3: person };
+  const rpc = {
+    call: async (method, params) => {
+      if (method === "getAccountInfo" && params[1]?.encoding === "jsonParsed")
+        return { value: { owner: T22, data: { parsed: { type: "mint", info: { decimals: 6, supply: "1000000", mintAuthority: null, freezeAuthority: null, extensions: [] } } } } };
+      if (method === "getAccountInfo") return { value: null }; // no Metaplex metadata
+      if (method === "getTokenLargestAccounts") return { value: [{ address: "TA1", amount: "500000" }, { address: "TA2", amount: "450000" }, { address: "TA3", amount: "50000" }] };
+      if (method === "getMultipleAccounts" && params[1]?.dataSlice?.offset === 32)
+        return { value: params[0].map((a) => ({ data: [Buffer.from(base58Decode(owners[a])).toString("base64"), "base64"] })) };
+      if (method === "getMultipleAccounts") return { value: params[0].map((o) => ({ owner: o === curve ? PUMP : "11111111111111111111111111111111" })) };
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const r = await analyzeToken(rpc, USDC, { knownCreator: person });
+  assert.deepEqual(r.holders.map((h) => h.pool), ["program account", "Pump.fun bonding curve", null]);
+  assert.equal(r.creator.pct, 5);
+  const risk = scoreReport(r);
+  assert.ok(!ids(risk).includes("top_holder"), "only the 5% person counts toward concentration");
 });

@@ -64,9 +64,11 @@ export function decodePumpTradeEvent(b64) {
 }
 
 export class RpcLogsLaunchSource extends EventEmitter {
-  constructor(wsUrl, { programs = [PROGRAMS.PUMP_FUN] } = {}) {
+  constructor(wsUrl, { programs = [PROGRAMS.PUMP_FUN], fallbackUrl = null } = {}) {
     super();
     this.wsUrl = wsUrl;
+    this.fallbackUrl = fallbackUrl;
+    this.failedOpens = 0;
     this.programs = programs;
     this.ws = null;
     this.stopped = false;
@@ -107,7 +109,7 @@ export class RpcLogsLaunchSource extends EventEmitter {
       const evt = decodePumpCreateEvent(d);
       if (!evt) continue;
       this.stats.launches++;
-      this.emit("launch", { ...evt, source: "pump.fun", signature: v.signature, slot, seenAt: Date.now() });
+      this.emit("launch", { ...evt, source: "pump.fun", dex: "pumpfun", signature: v.signature, slot, seenAt: Date.now() });
     }
     for (const d of data) {
       const t = decodePumpTradeEvent(d);
@@ -120,7 +122,10 @@ export class RpcLogsLaunchSource extends EventEmitter {
   #connect() {
     const ws = new WebSocket(this.wsUrl);
     this.ws = ws;
+    let opened = false;
     ws.onopen = () => {
+      opened = true;
+      this.failedOpens = 0;
       this.attempt = 0;
       this.stats.connected = true;
       this.emit("status", { source: "rpc-logs", connected: true });
@@ -153,6 +158,12 @@ export class RpcLogsLaunchSource extends EventEmitter {
       this.dog?.stop();
       this.emit("status", { source: "rpc-logs", connected: false });
       if (this.stopped) return;
+      // Plans without WebSocket access (e.g. Solami Free) refuse the upgrade: use the fallback.
+      if (!opened && ++this.failedOpens >= 2 && this.fallbackUrl && this.wsUrl !== this.fallbackUrl) {
+        this.wsUrl = this.fallbackUrl;
+        this.attempt = 0;
+        this.emit("warning", { source: "rpc-logs", message: "WebSocket refused (plan without WS access?); switching to the fallback endpoint" });
+      }
       this.stats.reconnects++;
       const delay = Math.min(30000, 1000 * 2 ** this.attempt++);
       setTimeout(() => this.#connect(), delay);

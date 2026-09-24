@@ -89,11 +89,11 @@ export function scoreReport(r, ctx = {}) {
     const top10 = holders.slice(0, 10).reduce((s, h) => s + h.pct, 0);
     if (top >= 50) add(30, "top_holder", `One wallet holds ${top.toFixed(1)}% of supply.`);
     else if (top >= 20) add(15, "top_holder", `One wallet holds ${top.toFixed(1)}% of supply.`);
-    if (top10 >= 50) add(15, "top10", `Top 10 wallets (excluding pools) hold ${top10.toFixed(1)}% of supply.`);
-    else positives.push(`Top 10 wallets (excluding pools) hold ${top10.toFixed(1)}%.`);
+    if (top10 >= 50) add(15, "top10", `Top 10 wallets (excluding pools and program accounts) hold ${top10.toFixed(1)}% of supply.`);
+    else positives.push(`Top 10 wallets (excluding pools and program accounts) hold ${top10.toFixed(1)}%.`);
   }
   const pooled = (r.holders || []).filter((h) => h.pool).reduce((s, h) => s + h.pct, 0);
-  if (pooled > 0) positives.push(`${pooled.toFixed(1)}% of supply sits in pools/curves.`);
+  if (pooled > 0) positives.push(`${pooled.toFixed(1)}% of supply sits in pools, curves or other program accounts.`);
 
   // --- creator
   if (r.creator?.pct !== undefined) {
@@ -120,11 +120,17 @@ export function scoreReport(r, ctx = {}) {
   const cs = ctx.creatorSold;
   if (cs && cs.pct >= 50) add(35, "creator_dump", `Creator already sold ${Math.round(cs.pct)}% of their tokens, ${fmtAge(cs.afterSec)} after launch.`);
   else if (cs && cs.pct >= 20) add(15, "creator_dump", `Creator has started selling (${Math.round(cs.pct)}% of their tokens, ${fmtAge(cs.afterSec)} after launch).`);
+  const cm = ctx.creatorMoved;
+  if (cm && cm.pct >= 50) add(20, "creator_transfer", `Creator moved ${Math.round(cm.pct)}% of their tokens to other wallets, ${fmtAge(cm.afterSec)} after launch (a common way to hide a dump).`);
+  const lp = ctx.liquidityPulled;
+  if (lp) add(40, "liquidity_pulled", `Creator removed $${Math.round(lp.usd).toLocaleString("en-US")} of liquidity from the pool, ${fmtAge(lp.afterSec)} after launch.`);
   if (ctx.sameNameLaunches >= 2) add(10, "copycat", `${ctx.sameNameLaunches} other tokens with this name/symbol launched in the last hour (copycat wave).`);
 
   // --- who holds the powers: a personal wallet can act any time; a program address (PDA)
   // can only act by that program's rules (prediction-market shares, vault/LP tokens...).
   const notes = [];
+  if (ctx.graduated) notes.push(`Graduated from ${ctx.graduated.launchpad || "its launchpad"} to a ${ctx.graduated.dex || "DEX"} pool.`);
+  if (ctx.surge?.multiple) notes.push(`Volume surge: ${ctx.surge.multiple}x its baseline${ctx.surge.volumeUsd ? ` ($${Math.round(ctx.surge.volumeUsd).toLocaleString("en-US")} in ${Math.round((ctx.surge.windowSecs || 300) / 60)} min)` : ""}.`);
   const holderOf = r.authorities || {};
   const ctl = r.controllers || {};
   let programHeld = 0;

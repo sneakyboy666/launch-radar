@@ -1,74 +1,110 @@
-// Solami Blur: decoded market data (trades, token launches, pools) over WebSocket.
+// Solami Blur: decoded Solana market data over WebSocket (https://solami.dev/docs/blur).
 // Endpoint: wss://ws.solami.dev/data/subscribe?chain=solana&api_key=...
 //
-// The field names below are normalized defensively (several spellings are accepted).
-// Run `launch-radar discover` once with a key to record real messages to
-// data/blur-sample.jsonl and tighten the mapping.
+// Launch Radar opens two Blur streams:
+//   launches: every token_create and graduation, on every launchpad (pumpfun, raydium_launchpad,
+//             meteora_dbc, ...), filtered by type at connect time
+//   tracked:  swaps, transfers, liquidity changes and volume surges for exactly the tokens the
+//             radar is watching; the mint filter is replaced live as new tokens launch
+// Blur sends fractional numbers as decimal strings and raw u64 amounts as integers or strings.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { isValidPubkey } from "../solana.js";
 import { StallWatchdog, dropSocket } from "./watchdog.js";
 
-const pick = (o, ...keys) => {
-  for (const k of keys) if (o?.[k] !== undefined && o[k] !== null) return o[k];
-  return undefined;
+const WSOL = "So11111111111111111111111111111111111111112";
+const num = (v) => {
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  return Number.isFinite(n) ? n : null;
 };
+const big = (v) => {
+  try {
+    return v === undefined || v === null ? null : BigInt(typeof v === "number" ? Math.trunc(v) : String(v).split(".")[0]);
+  } catch {
+    return null;
+  }
+};
+const key = (v) => (typeof v === "string" && isValidPubkey(v) ? v : null);
 
-export function normalizeBlurEvent(raw) {
-  const e = raw?.data && typeof raw.data === "object" && !Array.isArray(raw.data) ? { ...raw, ...raw.data } : raw;
-  const kind = String(pick(e, "type", "event", "kind", "channel") || "").toLowerCase();
-  const mint = pick(e, "mint", "token_address", "tokenAddress", "base_mint", "baseMint", "token");
-  if (typeof mint !== "string" || !isValidPubkey(mint)) return null;
-  if (/launch|create|new_?token|mint/.test(kind)) {
-    return {
-      type: "launch",
-      mint,
-      name: pick(e, "name", "token_name", "tokenName") || "",
-      symbol: pick(e, "symbol", "token_symbol", "tokenSymbol") || "",
-      creator: pick(e, "creator", "deployer", "user", "owner") || null,
-      source: pick(e, "dex", "platform", "program", "source") || "blur",
-      signature: pick(e, "signature", "tx", "txid") || null,
-    };
+// Map one Blur frame to a radar event, or null for frames the radar doesn't use.
+export function normalizeBlurEvent(m) {
+  switch (m?.type) {
+    case "token_create": {
+      const mint = key(m.mint);
+      if (!mint || m.kind === "pool") return null;
+      return { type: "launch", mint, name: m.name || "", symbol: m.symbol || "", uri: m.uri || "", creator: key(m.creator), pool: key(m.pool), dex: m.dex || null, source: `solami: ${m.dex || "launch"}`, signature: m.signature || null };
+    }
+    case "swap": {
+      const mint = key(m.mint);
+      if (!mint) return null;
+      const quote = num(m.quote_amount);
+      return {
+        type: "trade",
+        mint,
+        side: m.side === "buy" ? "buy" : "sell",
+        usd: num(m.volume_usd) ?? 0,
+        priceUsd: num(m.price_usd),
+        mcapUsd: num(m.mcap_usd),
+        sol: m.quote_mint === WSOL && quote !== null ? quote / 1e9 : undefined,
+        tokens: big(m.base_amount),
+        wallet: key(m.trader),
+        dex: m.dex || null,
+        pool: key(m.pool),
+        signature: m.signature || null,
+        source: "solami-blur",
+      };
+    }
+    case "transfer": {
+      const mint = key(m.mint);
+      if (!mint) return null;
+      return { type: "transfer", mint, kind: m.kind || "transfer", from: key(m.src_owner), to: key(m.dst_owner), amount: big(m.amount), signature: m.signature || null };
+    }
+    case "liquidity": {
+      const mint = key(m.base_mint);
+      if (!mint) return null;
+      return { type: "liquidity", mint, kind: m.kind, provider: key(m.provider), usd: (num(m.base_usd) ?? 0) + (num(m.quote_usd) ?? 0), pool: key(m.pool), dex: m.dex || null, signature: m.signature || null };
+    }
+    case "graduation": {
+      const mint = key(m.mint);
+      return mint ? { type: "graduation", mint, launchpad: m.launchpad || null, pool: key(m.pool), dex: m.dex || null } : null;
+    }
+    case "surge": {
+      const mint = key(m.mint);
+      return mint ? { type: "surge", mint, multiple: num(m.multiple), volumeUsd: num(m.volume_window_usd), windowSecs: m.window_secs ?? null } : null;
+    }
+    case "token_update": {
+      const mint = key(m.mint);
+      return mint ? { type: "market", mint, liquidityUsd: num(m.liquidity_usd), mcapUsd: num(m.mcap_usd), buys5m: m.buys_5m ?? null, sells5m: m.sells_5m ?? null, volume5mUsd: num(m.volume_5m_usd) } : null;
+    }
+    default:
+      return null;
   }
-  if (/swap|trade/.test(kind) || pick(e, "side", "is_buy", "isBuy") !== undefined) {
-    const sideRaw = pick(e, "side", "direction");
-    const isBuy = pick(e, "is_buy", "isBuy");
-    const side = isBuy !== undefined ? (isBuy ? "buy" : "sell") : /buy/i.test(String(sideRaw || "")) ? "buy" : "sell";
-    const usd = Number(pick(e, "volume_usd", "amount_usd", "usd", "value_usd", "volumeUsd") || 0);
-    return {
-      type: "trade",
-      mint,
-      side,
-      usd: Number.isFinite(usd) ? usd : 0,
-      priceUsd: Number(pick(e, "price_usd", "priceUsd", "price") || 0) || null,
-      wallet: pick(e, "wallet", "trader", "owner", "maker", "signer") || null,
-      dex: pick(e, "dex", "program", "source") || null,
-      signature: pick(e, "signature", "tx", "txid") || null,
-    };
-  }
-  if (/pool|liquidity/.test(kind)) {
-    return { type: "pool", mint, dex: pick(e, "dex", "program", "source") || null, liquidityUsd: Number(pick(e, "liquidity_usd", "liquidityUsd") || 0) || null };
-  }
-  return null;
 }
 
 export class SolamiBlurSource extends EventEmitter {
-  constructor(url, { subscriptions = [{ type: "swap" }, { type: "launch" }, { type: "pool" }], discoverDir = null } = {}) {
+  // name: label for status/warnings; query: connect-time filter (e.g. "type=token_create,graduation");
+  // types: event types for the live filter used with setMints(); discoverDir: record raw frames.
+  constructor(url, { name = "solami-blur", query = "", types = null, discoverDir = null, staleMs = 60000 } = {}) {
     super();
     this.url = url;
-    this.subscriptions = subscriptions;
+    this.name = name;
+    this.query = query;
+    this.types = types;
+    this.mints = [];
+    this.staleMs = staleMs;
     this.discoverDir = discoverDir;
     this.discovered = 0;
     this.stopped = false;
     this.attempt = 0;
-    this.stats = { connected: false, messages: 0, trades: 0, launches: 0, pools: 0, unknown: 0, lastMessageAt: null, reconnects: 0 };
+    this.stats = { connected: false, messages: 0, launches: 0, trades: 0, transfers: 0, liquidity: 0, graduations: 0, surges: 0, markets: 0, other: 0, filterUpdates: 0, lastMessageAt: null, reconnects: 0 };
   }
 
   start() {
     if (!this.url) return this;
     this.stopped = false;
-    this.#connect();
+    // A tracked stream with no mints yet would be the whole firehose: wait for setMints().
+    if (!this.types || this.mints.length) this.#connect();
     return this;
   }
 
@@ -76,6 +112,20 @@ export class SolamiBlurSource extends EventEmitter {
     this.stopped = true;
     this.dog?.stop();
     this.ws?.close();
+  }
+
+  // Replace the tracked-token filter (Blur replaces the whole filter on every update).
+  setMints(mints) {
+    this.mints = [...new Set(mints)].slice(0, 300);
+    if (!this.mints.length || this.stopped || !this.url) return;
+    if (!this.ws) return this.#connect();
+    if (this.ready) this.#sendFilter();
+  }
+
+  #sendFilter() {
+    if (!this.types || this.ws?.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ filter: { types: this.types, mints: this.mints } }));
+    this.stats.filterUpdates++;
   }
 
   #record(raw) {
@@ -97,45 +147,51 @@ export class SolamiBlurSource extends EventEmitter {
     } catch {
       return;
     }
-    const items = Array.isArray(msg) ? msg : Array.isArray(msg?.data) ? msg.data : Array.isArray(msg?.events) ? msg.events : [msg];
-    for (const item of items) {
-      const n = normalizeBlurEvent(item);
-      if (!n) {
-        this.stats.unknown++;
-        continue;
-      }
-      this.stats[n.type === "trade" ? "trades" : n.type === "launch" ? "launches" : "pools"]++;
-      this.emit(n.type, { ...n, seenAt: Date.now() });
+    if (msg?.type === "connected") {
+      // The server takes a live filter only after it has said hello.
+      this.ready = true;
+      if (this.types) this.#sendFilter();
+      return;
     }
+    const n = normalizeBlurEvent(msg);
+    if (!n) {
+      this.stats.other++;
+      return;
+    }
+    const counter = { launch: "launches", trade: "trades", transfer: "transfers", liquidity: "liquidity", graduation: "graduations", surge: "surges", market: "markets" }[n.type];
+    this.stats[counter]++;
+    this.emit(n.type, { ...n, seenAt: Date.now() });
   }
 
   #connect() {
-    const ws = new WebSocket(this.url);
+    this.ready = false;
+    const sep = this.url.includes("?") ? "&" : "?";
+    const ws = new WebSocket(this.query ? `${this.url}${sep}${this.query}` : this.url);
     this.ws = ws;
     ws.onopen = () => {
       this.attempt = 0;
       this.stats.connected = true;
-      this.emit("status", { source: "solami-blur", connected: true });
+      this.emit("status", { source: this.name, connected: true });
       this.dog?.stop();
       this.dog = new StallWatchdog(() => {
         this.stats.stalls = (this.stats.stalls || 0) + 1;
-        this.emit("warning", { source: "solami-blur", message: "stream went quiet, reconnecting" });
+        this.emit("warning", { source: this.name, message: "stream went quiet, reconnecting" });
         dropSocket(ws);
-      }).start();
-      for (const sub of this.subscriptions) ws.send(JSON.stringify(sub));
+      }, this.staleMs).start();
     };
     ws.onmessage = (ev) => {
       try {
         this.#onMessage(ev);
       } catch (e) {
-        this.emit("warning", { source: "solami-blur", message: `message skipped: ${e.message}` });
+        this.emit("warning", { source: this.name, message: `message skipped: ${e.message}` });
       }
     };
     ws.onerror = () => {};
     ws.onclose = () => {
       this.stats.connected = false;
+      this.ready = false;
       this.dog?.stop();
-      this.emit("status", { source: "solami-blur", connected: false });
+      this.emit("status", { source: this.name, connected: false });
       if (this.stopped) return;
       this.stats.reconnects++;
       setTimeout(() => this.#connect(), Math.min(30000, 1000 * 2 ** this.attempt++));

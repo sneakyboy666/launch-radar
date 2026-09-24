@@ -54,16 +54,36 @@ function watch() {
   const rpc = new Rpc(cfg.rpcUrl, { maxConcurrent: cfg.concurrency, minIntervalMs: cfg.minIntervalMs });
   const radar = new Radar(rpc, cfg);
   const alerts = new Alerts(cfg.webhookUrl);
-  const sources = { launches: new RpcLogsLaunchSource(cfg.wsUrl).start() };
-  if (cfg.trapWatch) sources.traps = new Token2022TrapWatch(cfg.wsUrl, rpc).start();
-  if (cfg.blurUrl) sources.blur = new SolamiBlurSource(cfg.blurUrl).start();
+  const sources = { launches: new RpcLogsLaunchSource(cfg.wsUrl, { fallbackUrl: cfg.wsFallbackUrl }).start() };
+  if (cfg.trapWatch) sources.traps = new Token2022TrapWatch(cfg.wsUrl, rpc, { fallbackUrl: cfg.wsFallbackUrl }).start();
+  if (cfg.blurUrl) {
+    // Every launch on every launchpad, plus graduations to AMM pools.
+    sources.blurLaunches = new SolamiBlurSource(cfg.blurUrl, { name: "solami-launches", query: "type=token_create,graduation&metadata=false" }).start();
+    // Swaps, transfers, liquidity and surges for exactly the tokens on the radar; the mint
+    // filter is replaced live (debounced) as new tokens arrive.
+    sources.blurTracked = new SolamiBlurSource(cfg.blurUrl, { name: "solami-tracked", types: ["swap", "transfer", "liquidity", "surge"], staleMs: 120000 }).start();
+    let last = "";
+    setInterval(() => {
+      const mints = radar.trackedMints();
+      const sig = mints.join(",");
+      if (sig && sig !== last) {
+        last = sig;
+        sources.blurTracked.setMints(mints);
+      }
+    }, 3000).unref();
+  }
 
   sources.launches.on("launch", (l) => radar.onLaunch(l));
   sources.launches.on("trade", (t) => radar.onTrade(t));
   sources.traps?.on("launch", (l) => radar.onLaunch(l));
-  if (sources.blur) {
-    sources.blur.on("launch", (l) => radar.onLaunch(l));
-    sources.blur.on("trade", (t) => radar.onTrade(t));
+  if (sources.blurLaunches) {
+    sources.blurLaunches.on("launch", (l) => radar.onLaunch(l));
+    sources.blurLaunches.on("graduation", (g) => radar.onGraduation(g));
+    const t = sources.blurTracked;
+    t.on("trade", (x) => radar.onTrade(x));
+    t.on("transfer", (x) => radar.onTransfer(x));
+    t.on("liquidity", (x) => radar.onLiquidity(x));
+    t.on("surge", (x) => radar.onSurge(x));
   }
   for (const s of Object.values(sources)) {
     s.on("status", (st) => console.log(`${C.dim}[${st.source}] ${st.connected ? "connected" : "disconnected, retrying"}${C.reset}`));
@@ -80,7 +100,7 @@ function watch() {
 
   startServer({ cfg, radar, rpc, sources });
   console.log(`${C.bold}Launch Radar${C.reset} watching Solana mainnet`);
-  console.log(`  data:      ${cfg.usingSolami ? "Solami (RPC + WebSocket + Blur)" : "public Solana RPC (light mode). Set SOLAMI_API_KEY for full analysis + Blur trade flow"}`);
+  console.log(`  data:      ${cfg.usingSolami ? "Solami (RPC + WebSocket + Blur launches/swaps/transfers/liquidity)" : "public Solana RPC (light mode). Set SOLAMI_API_KEY for full analysis + Blur market data"}`);
   console.log(`  rpc:       ${redact(cfg.rpcUrl)}`);
   console.log(`  dashboard: http://${cfg.host}:${cfg.port}`);
   console.log(`  alerts:    ${cfg.webhookUrl ? `${cfg.alertLevel}+ to webhook` : "off (set WEBHOOK_URL)"}\n`);

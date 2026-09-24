@@ -130,7 +130,7 @@ function renderRows() {
     const top = t.flags[0]?.text || t.positives?.[0] || (t.error ? "Error: " + t.error : "");
     const f = t.flow;
     const vol = f.buyUsd + f.sellUsd ? `$${f.buyUsd} bought / $${f.sellUsd} sold` : `${f.buySol} SOL bought / ${f.sellSol} SOL sold`;
-    const flow = f.buys + f.sells ? `<span title="${esc(vol)}">${f.buys}B / ${f.sells}S</span>${f.buyPressure !== null ? `<span class="bar" title="buy pressure ${f.buyPressure}%"><i style="width:${f.buyPressure}%"></i></span>` : ""}${t.creatorSoldPct >= 50 ? `<div class="tag dump" title="Creator sold ${Math.round(t.creatorSoldPct)}% of their tokens">dev sold</div>` : ""}` : `<span class="name">—</span>`;
+    const flow = f.buys + f.sells ? `<span title="${esc(vol)}">${f.buys}B / ${f.sells}S</span>${f.buyPressure !== null ? `<span class="bar" title="buy pressure ${f.buyPressure}%"><i style="width:${f.buyPressure}%"></i></span>` : ""}${t.creatorSoldPct >= 50 ? `<div class="tag dump" title="Creator sold ${Math.round(t.creatorSoldPct)}% of their tokens">dev sold</div>` : ""}${t.creatorMovedPct >= 50 ? `<div class="tag dump" title="Creator moved ${Math.round(t.creatorMovedPct)}% of their tokens to other wallets">dev moved</div>` : ""}${t.lpRemovedUsd ? `<div class="tag dump" title="Creator removed $${t.lpRemovedUsd} of liquidity">LP pulled</div>` : ""}${t.graduated ? `<div class="tag" title="Graduated to ${esc(t.graduated.dex || "an AMM")}">graduated</div>` : ""}${t.surge ? `<div class="tag" title="Volume ${t.surge.multiple}x its baseline">surge</div>` : ""}` : `<span class="name">—</span>`;
     return `<tr data-m="${esc(t.mint)}" class="${selected === t.mint ? "sel" : ""}">
       <td><span class="badge ${esc(lvl)}">${esc(label)}</span>${t.category === "protocol" ? `<div class="tag" title="Every power over this token is held by a program, not a person">protocol</div>` : ""}</td>
       <td class="num">${t.score ?? ""}</td>
@@ -176,7 +176,8 @@ function flowLine(t) {
   const vol = f.buyUsd + f.sellUsd ? `$${f.buyUsd} in / $${f.sellUsd} out` : `${f.buySol} SOL in / ${f.sellSol} SOL out`;
   const dev = t.creatorSoldPct !== null && t.creatorSoldPct !== undefined ? ` · creator sold ${Math.round(t.creatorSoldPct)}%` : "";
   const curve = f.curveSol !== null && f.curveSol !== undefined ? ` · curve ${f.curveSol} SOL` : "";
-  return `<div class="name" style="margin:6px 0">Flow: ${f.buys} buys / ${f.sells} sells (${vol}), ${f.uniqueWallets} wallets${curve}${dev}</div>`;
+  const mk = t.market?.mcapUsd ? ` · mcap $${Math.round(t.market.mcapUsd).toLocaleString("en-US")}` : "";
+  return `<div class="name" style="margin:6px 0">Flow: ${f.buys} buys / ${f.sells} sells (${vol}), ${f.uniqueWallets} wallets${curve}${mk}${dev}</div>`;
 }
 
 function renderStatus(s) {
@@ -187,7 +188,8 @@ function renderStatus(s) {
     `<span class="pill"><b>${s.usingSolami ? "Solami" : "Public RPC"}</b>${s.lightMode ? " · light mode" : ""}</span>`,
     pill("Pump.fun launches", src.launches),
     src.traps ? pill("Token-2022 trap watch", src.traps) : "",
-    src.blur ? pill("Solami Blur trades", src.blur) : "",
+    src.blurLaunches ? pill("Solami Blur launches", src.blurLaunches) : "",
+    src.blurTracked ? pill("Solami Blur tracked", src.blurTracked) : "",
     `<span class="pill">RPC ${m.rpc.avgLatencyMs ?? "–"} ms</span>`,
   ].join("");
   const card = (k, v) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`;
@@ -202,6 +204,9 @@ function renderStatus(s) {
     card("Protocol tokens", m.protocolTokens ?? 0),
     card("Creator dumps", m.creatorDumps ?? 0),
     card("Creator dumped: flagged vs clean", outcomeText(m.outcomes)),
+    m.byLaunchpad && Object.keys(m.byLaunchpad).length > 1 ? card("Launchpads", Object.entries(m.byLaunchpad).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${esc(k.replace(/^solami: /, ""))} ${v}`).join(" · ")) : "",
+    src.blurTracked ? card("Dev moved / LP pulled", `${m.creatorTransfers ?? 0} / ${m.liquidityPulls ?? 0}`) : "",
+    src.blurTracked ? card("Graduated / surges", `${m.graduations ?? 0} / ${m.surges ?? 0}`) : "",
   ].join("");
 }
 
