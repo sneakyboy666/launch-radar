@@ -106,6 +106,10 @@ let order = [];
 let filter = "all";
 let selected = null;
 const $ = (id) => document.getElementById(id);
+// Anyone can name a token anything. Slurs are masked on screen (add ?raw=1 to the URL to see raw names).
+const SLURS = /n[i1!]gg|f[a@4]gg?[o0]t|k[i1]ke\b|ch[i1]nk|sp[i1]c\b|tr[a@]nn(y|ie)|retard|wetback|coon\b|beaner/i;
+const RAW = new URLSearchParams(location.search).has("raw");
+const clean = (s) => (!RAW && SLURS.test(String(s ?? "")) ? "(name hidden)" : s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const ago = (t) => { const s = Math.max(0, Math.round((Date.now() - t) / 1000)); return s < 60 ? s + "s" : Math.round(s / 60) + "m"; };
 const TRAPS = new Set(["permanent_delegate", "non_transferable", "default_frozen", "pausable", "transfer_hook", "transfer_fee"]);
@@ -135,7 +139,7 @@ function renderRows() {
     return `<tr data-m="${esc(t.mint)}" class="${selected === t.mint ? "sel" : ""}">
       <td><span class="badge ${esc(lvl)}">${esc(label)}</span>${t.category === "protocol" ? `<div class="tag" title="Every power over this token is held by a program, not a person">protocol</div>` : ""}</td>
       <td class="num">${t.score ?? ""}</td>
-      <td><div class="sym">${esc(t.symbol || "?")}</div><div class="name">${esc((t.name || "").slice(0, 40))}</div></td>
+      <td><div class="sym">${esc(clean(t.symbol || "?"))}</div><div class="name">${esc(clean(t.name || "").slice(0, 40))}</div></td>
       <td><div class="flagtxt" title="${esc(top)}">${esc(top)}</div></td>
       <td class="flow">${flow}</td>
       <td class="name">${esc(t.source)}</td>
@@ -151,8 +155,8 @@ function renderDetail(t) {
     ...(t.positives || []).map((p) => `<li><span class="ok">✓</span>${esc(p)}</li>`),
   ].join("");
   $("detail").innerHTML = `
-    <h2>${esc(t.symbol || "?")} <span class="badge ${esc(t.level || "PENDING")}">${esc(t.level || t.status)}</span>${t.category === "protocol" ? ` <span class="tag">protocol</span>` : ""}</h2>
-    <div class="name">${esc(t.name || "")}</div>
+    <h2>${esc(clean(t.symbol || "?"))} <span class="badge ${esc(t.level || "PENDING")}">${esc(t.level || t.status)}</span>${t.category === "protocol" ? ` <span class="tag">protocol</span>` : ""}</h2>
+    <div class="name">${esc(clean(t.name || ""))}</div>
     <div class="mono" style="margin-top:6px">${esc(t.mint)}</div>
     <ul>${items || "<li class='name'>Analysis pending…</li>"}</ul>
     ${flowLine(t)}

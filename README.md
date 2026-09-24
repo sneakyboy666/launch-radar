@@ -11,6 +11,10 @@ copies of the same coin in an hour.
 Launch Radar watches mainnet as tokens are created, checks each one on-chain within
 seconds, and explains the risk in plain English.
 
+**Videos:** [90-second live demo](https://github.com/sneakyboy666/launch-radar/releases/download/v0.1.0/demo.mp4) ·
+[2-minute pitch](https://github.com/sneakyboy666/launch-radar/releases/download/v0.1.0/pitch.mp4)
+(recorded from the live dashboard on mainnet; nothing staged)
+
 - **Live feed:** Pump.fun launches (decoded straight from program logs) plus every new
   Token-2022 mint that initializes a dangerous extension ("trap watch"), plus Solami Blur
   market events.
