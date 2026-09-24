@@ -98,7 +98,7 @@ function watch() {
   });
   radar.on("alert", (v) => alerts.send(v));
 
-  startServer({ cfg, radar, rpc, sources });
+  startServer({ cfg, radar, rpc, sources, alerts });
   console.log(`${C.bold}Launch Radar${C.reset} watching Solana mainnet`);
   console.log(`  data:      ${cfg.usingSolami ? "Solami (RPC + WebSocket + Blur launches/swaps/transfers/liquidity)" : "public Solana RPC (light mode). Set SOLAMI_API_KEY for full analysis + Blur market data"}`);
   console.log(`  rpc:       ${redact(cfg.rpcUrl)}`);

@@ -19,8 +19,8 @@ seconds, and explains the risk in plain English.
 - **Trade flow + dev-dump detection:** every Pump.fun buy/sell is decoded from the same log stream
   (`TradeEvent`), so the radar sees the creator selling seconds after launch and re-scores the
   token live. With a Solami key, Blur's decoded trades add USD volume across venues.
-- **Checks its own predictions:** tracks how often tokens it flagged at launch are later dumped by
-  their creator, versus tokens it scored clean.
+- **Checks its own predictions:** for every red flag present at launch, tracks how often the
+  creator dumped afterwards, live. (Result so far: no launch-time flag predicts a dump; see below.)
 - **Alerts:** HIGH/CRITICAL launches to a Discord (or any) webhook.
 - **Check any token:** `launch-radar check <mint>` or the dashboard's "Check any token" box.
 - **Zero dependencies:** Node 22+ and nothing else. `npm test` runs offline.
@@ -56,21 +56,33 @@ curve (a key someone holds) or off it (only a program can sign), looks up the ow
 discounts program-held powers, labels the token **protocol**, and keeps them out of the scam
 statistics and alerts. Same powers in a personal wallet stay CRITICAL.
 
-### Does the score predict anything? (live run, 2026-09-23, 10 minutes, public RPC)
+### Can you predict a dump at launch? We measured it (live, Solami, 15 minutes, 2026-09-23)
 
-| | Tokens | Creator sold ≥50% within minutes |
+The radar remembers which red flags each token had at launch, then watches whether its creator
+sells at least half their tokens. Unfiltered results from 432 launches:
+
+| Red flag at launch | Tokens | Creator dumped within minutes |
 |---|---|---|
-| Flagged at launch (MEDIUM+, before any selling) | 92 | **82%** |
-| Scored clean (LOW) | 128 | 50% |
-| All Pump.fun launches | 220 | 60% |
+| none | 167 | **56%** |
+| serial launcher (3+ launches in an hour) | 132 | 52% |
+| whale holder | 39 | 49% |
+| creator holds 10%+ | 61 | 39% |
+| copycat name | 149 | 34% |
 
-Most Pump.fun creators sell fast, so a clean score is not a buy signal. But tokens Launch Radar
-flags at launch are dumped far more often, and the dashboard keeps measuring this live.
+**Finding: launch-time red flags do not predict a creator dump. About half of memecoin creators
+dump regardless.** (An earlier 10-minute run on the public RPC showed 82% vs 50%; it did not
+replicate, so we don't claim it.) That is why Launch Radar watches the creator *live*: Pump.fun
+trade events and Solami Blur swaps, transfers and liquidity changes re-score a token within
+seconds of the creator selling, moving tokens out, or pulling liquidity. The static checks answer a
+different question: what the creator *can* do (mint more, freeze you, pull tokens with a permanent
+delegate, tax sells), which no amount of trading data shows. The dashboard keeps measuring this live
+("Best dump predictor").
 
 ### Reliability
 
-A 10-minute soak test on mainnet analyzed 354 launches with 0 failures and 0 RPC errors while the
-trap watch processed ~660k Token-2022 log messages. Every stream has a stall watchdog: if a
+On a free Solami key, a 15-minute live run analyzed 432 of 435 launches (Pump.fun, Raydium
+LaunchLab, Meteora DBC) with 1,863 RPC calls, 0 RPC errors and 160 ms average latency, while Blur
+streamed ~50k swaps and ~6k transfers for the tracked tokens. Every stream has a stall watchdog: if a
 socket stays open but goes quiet for 30 s (seen on the public RPC), it is dropped and
 reconnected with backoff.
 

@@ -59,13 +59,14 @@ out of alerts and scam stats. We found these in our own soak test: they were ~25
 "CRITICAL" results before this fix. Official assets
 (USDC, USDT, PYUSD…) are shown as KNOWN, with their issuer controls listed as information.
 
-## Does the score actually predict anything?
-We check. For every token we remember the level we gave it at launch (before any selling), then
-watch whether its creator sells at least half their tokens. The dashboard shows the dump rate for
-tokens we flagged versus tokens we scored clean. If the flags mean something, the first number is
-much higher, and it is. In a 10-minute live run: 82% of flagged tokens were dumped by their
-creator within minutes, against 50% of clean ones (60% of all Pump.fun launches). That 50% matters
-too: most memecoin creators sell fast, so "clean" never means "safe".
+## Does the score predict a dump?
+We checked, and the honest answer is no. For every token we remember the red flags it had at
+launch (before any selling), then watch whether its creator sells at least half their tokens. In a
+15-minute live run (432 launches), tokens with no red flags were dumped 56% of the time, serial
+launchers 52%, copycats 34%. So a launch-time score can't tell you whether a memecoin creator will
+dump; about half do. That is why the radar watches the creator live and raises the score within
+seconds when they sell, move tokens out, or pull liquidity. The static checks answer a different
+question: what the creator is still *able* to do (mint, freeze, take tokens back, tax sells).
 
 ## Why Solami matters here
 - Full analysis of every launch needs lots of requests quickly; Solami Pro gives 200 requests/sec.

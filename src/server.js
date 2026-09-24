@@ -6,7 +6,7 @@ import { analyzeToken } from "./token.js";
 import { scoreReport } from "./score.js";
 import { isValidPubkey } from "./solana.js";
 
-export function startServer({ cfg, radar, rpc, sources }) {
+export function startServer({ cfg, radar, rpc, sources, alerts = null }) {
   const clients = new Set();
   const page = () => readFileSync(join(cfg.root, "web", "index.html"));
   const status = () => ({
@@ -14,6 +14,7 @@ export function startServer({ cfg, radar, rpc, sources }) {
     lightMode: cfg.lightMode,
     sources: Object.fromEntries(Object.entries(sources).map(([k, s]) => [k, s.stats])),
     metrics: radar.metrics(),
+    alerts: alerts?.stats() ?? null,
   });
   const push = (event, data) => {
     const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;

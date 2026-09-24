@@ -7,6 +7,12 @@ export class Alerts {
     this.last = 0;
     this.sent = 0;
     this.dropped = 0;
+    this.failed = 0;
+    this.lastStatus = null;
+  }
+
+  stats() {
+    return { enabled: Boolean(this.url), sent: this.sent, dropped: this.dropped, failed: this.failed, lastStatus: this.lastStatus };
   }
 
   async send(view) {
@@ -24,9 +30,13 @@ export class Alerts {
       : { event: "launch_risk", ...view };
     try {
       const res = await fetch(this.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(8000) });
+      this.lastStatus = res.status;
       if (res.ok) this.sent++;
+      else this.failed++;
       return res.ok;
-    } catch {
+    } catch (e) {
+      this.failed++;
+      this.lastStatus = e.name;
       return false;
     }
   }

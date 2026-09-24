@@ -214,7 +214,8 @@ export async function analyzeToken(rpc, mint, { withCreator = true, withHolders 
       }
       if (oldest && !before) {
         const tx = await rpc.call("getTransaction", [oldest.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }]);
-        const payer = tx?.transaction?.message?.accountKeys?.find((k) => k.signer)?.pubkey ?? null;
+        const k0 = tx?.transaction?.message?.accountKeys?.[0]; // fee payer
+        const payer = typeof k0 === "string" ? k0 : k0?.pubkey ?? null;
         report.creator = { address: payer, firstSignature: oldest.signature, createdAt: oldest.blockTime ? new Date(oldest.blockTime * 1000).toISOString() : null, txCount: count, source: "first transaction" };
       }
     } catch (e) {

@@ -402,3 +402,17 @@ test("per-flag outcomes: which red flags at launch were followed by a creator du
   assert.deepEqual(fo.mint_authority, { n: 1, dumped: 1, pctDumped: 100 });
   assert.deepEqual(fo.no_flags, { n: 1, dumped: 0, pctDumped: 0 });
 });
+
+test("Token-2022 mints found in raw transactions (RPCs that don't parse inner instructions)", () => {
+  const T22 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+  const payer = WALLET, mint = USDC, other = MARKET_PDA;
+  const b58 = (bytes) => base58Encode(Uint8Array.from(bytes));
+  const tx = {
+    transaction: { message: { accountKeys: [payer, T22], instructions: [{ programIdIndex: 1, accounts: [3], data: b58([20, 6]) }] } },
+    meta: {
+      loadedAddresses: { writable: [other], readonly: [mint] },
+      innerInstructions: [{ index: 0, instructions: [{ programIdIndex: 1, accounts: [2], data: b58([7, 1]) }] }], // opcode 7 = MintTo: ignored
+    },
+  };
+  assert.deepEqual(mintsFromParsedTx(tx), [mint]); // index 3 resolves through the lookup-table addresses
+});
