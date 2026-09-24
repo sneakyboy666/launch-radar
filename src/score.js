@@ -150,14 +150,18 @@ export function scoreReport(r, ctx = {}) {
       if (!f.text.includes(short(f.holder))) f.text += ` Held by wallet ${short(f.holder)}.`;
     }
   }
-  const category = programHeld > 0 && walletHeld === 0 ? "protocol" : "launch";
+  // All powers program-held: a protocol-issued token (prediction market, vault), unless it came from a
+  // launchpad, where the launchpad's program holding them is standard and the creator is a person.
+  const allProgram = programHeld > 0 && walletHeld === 0;
+  const category = allProgram && !ctx.viaLaunchpad ? "protocol" : "launch";
+  if (allProgram && ctx.viaLaunchpad) notes.push("Its powers are held by the launchpad's program (standard for this launchpad), not by the creator.");
   if (category === "protocol") {
     // Protocols mint many similar tokens (one per market); that's expected, not a warning sign.
     for (const id of ["serial_launcher", "copycat"]) {
       const i = flags.findIndex((f) => f.id === id);
       if (i >= 0) notes.push(`${flags.splice(i, 1)[0].text.replace(/ \((serial launcher|copycat wave)\)\.$/, ".")} Expected for a protocol creating markets.`);
     }
-    notes.unshift("Protocol-issued token: every power over it is held by a program address, not a person's wallet (typical of prediction-market outcome tokens and vault/LP shares). Lower risk, but only as safe as that program's rules.");
+    notes.unshift("Program-controlled token: every power over it is held by a program address (a launchpad, prediction market or vault), not a person's wallet. Lower risk, but only as safe as that program's rules.");
   }
 
   if (OFFICIAL.has(r.mint)) {

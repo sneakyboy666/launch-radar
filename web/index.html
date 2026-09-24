@@ -44,6 +44,7 @@ tbody tr:hover { background: var(--panel2); }
 tbody tr.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--ink2); }
+.metric .v .small { font-size: 14px; line-height: 1.35; font-weight: 600; display: block; }
 .tag.dump { color: var(--crit); border-color: var(--crit); }
 .tag { display: inline-block; margin-top: 3px; font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line, #3a3f47); color: var(--muted, #9aa3ad); vertical-align: middle; }
 .badge { display: inline-block; min-width: 74px; text-align: center; font-size: 11px; font-weight: 700; letter-spacing: .03em; padding: 2px 8px; border-radius: 6px; color: #0d0f12; }
@@ -162,6 +163,16 @@ function renderDetail(t) {
   bindCheck();
 }
 
+const PADS = { pumpfun: "Pump.fun", raydium_launchpad: "Raydium LaunchLab", meteora_dbc: "Meteora DBC", "token-2022": "Token-2022 traps" };
+// The red flag (seen at launch, n ≥ 10) whose tokens the creator most often dumped afterwards.
+function bestPredictor(fo) {
+  const rows = Object.entries(fo || {}).filter(([k, o]) => k !== "no_flags" && o.n >= 10).sort((a, b) => b[1].pctDumped - a[1].pctDumped);
+  if (!rows.length) return "–";
+  const [k, o] = rows[0];
+  const clean = fo.no_flags;
+  return `<span class="small">${esc(k.replace(/_/g, " "))}: ${o.pctDumped}% dumped (n=${o.n})${clean?.n ? `<br>no flags: ${clean.pctDumped}% (n=${clean.n})` : ""}</span>`;
+}
+
 // Share of tokens whose creator later sold ≥50%: flagged at launch (MEDIUM+) vs clean (LOW).
 function outcomeText(o) {
   if (!o) return "–";
@@ -204,7 +215,8 @@ function renderStatus(s) {
     card("Protocol tokens", m.protocolTokens ?? 0),
     card("Creator dumps", m.creatorDumps ?? 0),
     card("Creator dumped: flagged vs clean", outcomeText(m.outcomes)),
-    m.byLaunchpad && Object.keys(m.byLaunchpad).length > 1 ? card("Launchpads", Object.entries(m.byLaunchpad).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${esc(k.replace(/^solami: /, ""))} ${v}`).join(" · ")) : "",
+    m.byLaunchpad && Object.keys(m.byLaunchpad).length > 1 ? card("Launchpads", `<span class="small">${Object.entries(m.byLaunchpad).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${esc(PADS[k] || k)} ${v}`).join("<br>")}</span>`) : "",
+    card("Best dump predictor", bestPredictor(m.flagOutcomes)),
     src.blurTracked ? card("Dev moved / LP pulled", `${m.creatorTransfers ?? 0} / ${m.liquidityPulls ?? 0}`) : "",
     src.blurTracked ? card("Graduated / surges", `${m.graduations ?? 0} / ${m.surges ?? 0}`) : "",
   ].join("");

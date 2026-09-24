@@ -367,3 +367,38 @@ test("holders: owners read from raw bytes; program accounts (PDAs) are not whale
   const risk = scoreReport(r);
   assert.ok(!ids(risk).includes("top_holder"), "only the 5% person counts toward concentration");
 });
+
+test("launchpad tokens with program-held powers stay launches (not protocol tokens)", () => {
+  const base = { token: { mintAuthority: null, freezeAuthority: null, extensions: { transferFeeConfig: { newerTransferFee: { transferFeeBasisPoints: 100 }, transferFeeConfigAuthority: MARKET_PDA } } }, metadata: { name: "Faji", symbol: "FAJI", isMutable: true, updateAuthority: MARKET_PDA } };
+  const r = clean({ ...base, authorities: { fee_authority: MARKET_PDA, mutable_metadata: MARKET_PDA }, controllers: { [MARKET_PDA]: { kind: "program", program: MARKET_PROGRAM } } });
+  const pad = scoreReport(r, { viaLaunchpad: true, creatorLaunches: 5 });
+  assert.equal(pad.category, "launch");
+  assert.ok(ids(pad).includes("serial_launcher"), "a person launched it: serial launching still counts");
+  assert.ok(pad.notes.some((n) => /launchpad's program/.test(n)));
+  assert.equal(scoreReport(r, {}).category, "protocol");
+});
+
+test("per-flag outcomes: which red flags at launch were followed by a creator dump", () => {
+  const rpc = { stats: { requests: 0, errors: 0, retries: 0 }, avgLatencyMs: () => 0 };
+  const radar = new Radar(rpc, { lightMode: true, concurrency: 1, maxQueue: 10, analyzeDelayMs: 0, alertLevel: "HIGH" });
+  const dev = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+  const mints = ["Fake4444444444444444444444444444444444444444", "Fake5555555555555555555555555555555555555555"];
+  mints.forEach((mint, i) => {
+    radar.onLaunch({ mint, name: "Moon", symbol: "MOON" + i, creator: dev, source: "pump.fun", dex: "pumpfun", seenAt: Date.now() });
+    const e = radar.tokens.get(mint);
+    e.report = { mint, token: { mintAuthority: i === 0 ? dev : null, freezeAuthority: null, extensions: {} }, metadata: { name: "Moon", symbol: "MOON" + i, isMutable: false }, errors: [] };
+    e.ctx = {};
+    const pre = scoreReport(e.report, e.ctx);
+    e.preLevel = pre.level;
+    e.preFlags = pre.flags.length ? pre.flags.map((f) => f.id) : ["no_flags"];
+    for (const f of e.preFlags) (radar.flagOutcomes[f] ??= { n: 0, dumped: 0 }).n++;
+    e.status = "done";
+    e.risk = pre;
+  });
+  // Only the token that launched with a live mint authority gets dumped.
+  radar.onTrade({ mint: mints[0], side: "buy", tokens: 100n, wallet: dev, source: "pump.fun" });
+  radar.onTrade({ mint: mints[0], side: "sell", tokens: 100n, wallet: dev, source: "pump.fun" });
+  const fo = radar.metrics().flagOutcomes;
+  assert.deepEqual(fo.mint_authority, { n: 1, dumped: 1, pctDumped: 100 });
+  assert.deepEqual(fo.no_flags, { n: 1, dumped: 0, pctDumped: 0 });
+});

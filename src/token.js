@@ -202,7 +202,8 @@ export async function analyzeToken(rpc, mint, { withCreator = true, withHolders 
       let oldest = null;
       let count = 0;
       for (let page = 0; page < 5; page++) {
-        const sigs = await rpc.call("getSignaturesForAddress", [mint, { limit: 100, before, commitment: "confirmed" }]);
+        // Optional detail: keep it from stalling a check (some RPCs are slow on this method).
+        const sigs = await rpc.call("getSignaturesForAddress", [mint, { limit: 100, before, commitment: "confirmed" }], { retries: 1, timeoutMs: 6000 });
         count += sigs.length;
         if (sigs.length) oldest = sigs[sigs.length - 1];
         if (sigs.length < 100) {

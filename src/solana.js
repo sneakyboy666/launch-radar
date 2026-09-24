@@ -162,7 +162,7 @@ export class Rpc {
     if (next) next();
   }
 
-  async call(method, params = [], { retries = 4 } = {}) {
+  async call(method, params = [], { retries = 4, timeoutMs = this.timeoutMs } = {}) {
     for (let attempt = 0; ; attempt++) {
       await this.#slot();
       const started = Date.now();
@@ -171,7 +171,7 @@ export class Rpc {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", id: ++this.id, method, params }),
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         this.stats.requests++;
         this.stats.totalLatencyMs += Date.now() - started;

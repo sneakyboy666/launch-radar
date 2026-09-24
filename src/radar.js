@@ -29,6 +29,8 @@ export class Radar extends EventEmitter {
     // Outcome tracking: of the tokens scored at level X at launch (before any selling), how many
     // saw their creator dump afterwards? This is how we check the score predicts anything.
     this.outcomes = { LOW: { n: 0, dumped: 0 }, MEDIUM: { n: 0, dumped: 0 }, HIGH: { n: 0, dumped: 0 }, CRITICAL: { n: 0, dumped: 0 } };
+    // Same, per red flag present at launch ("no_flags" = nothing found): which flags predict dumps?
+    this.flagOutcomes = {};
     this.launchTimes = [];
     this.recent = []; // { t, creator, key } for serial-launcher and copycat detection
   }
@@ -39,6 +41,7 @@ export class Radar extends EventEmitter {
     const creator = entry.report?.creator?.address || entry.launch.creator;
     const key = nameKey(entry.report?.metadata || entry.launch);
     return {
+      viaLaunchpad: Boolean(entry.launch.dex && entry.launch.dex !== "token-2022"),
       creatorLaunches: creator ? this.recent.filter((x) => x.creator === creator).length : 0,
       sameNameLaunches: key ? this.recent.filter((x) => x.key === key && x.mint !== entry.mint).length : 0,
     };
@@ -127,6 +130,7 @@ export class Radar extends EventEmitter {
       dev.dumped = true;
       this.counters.creatorDumps++;
       if (entry.preLevel && this.outcomes[entry.preLevel]) this.outcomes[entry.preLevel].dumped++;
+      for (const f of entry.preFlags || []) this.flagOutcomes[f].dumped++;
     }
     if (entry.status === "done") this.#score(entry, true);
   }
@@ -242,6 +246,14 @@ export class Radar extends EventEmitter {
       entry.preLevel = pre.category === "launch" ? pre.level : null;
       if (entry.preLevel) this.outcomes[entry.preLevel].n++;
       if (entry.preLevel && entry.dev.dumped) this.outcomes[entry.preLevel].dumped++;
+      if (entry.preLevel) {
+        entry.preFlags = pre.flags.length ? [...new Set(pre.flags.map((f) => f.id))] : ["no_flags"];
+        for (const f of entry.preFlags) {
+          this.flagOutcomes[f] ??= { n: 0, dumped: 0 };
+          this.flagOutcomes[f].n++;
+          if (entry.dev.dumped) this.flagOutcomes[f].dumped++;
+        }
+      }
       const risk = this.#score(entry);
       entry.status = "done";
       this.counters.analyzed++;
@@ -331,6 +343,7 @@ export class Radar extends EventEmitter {
       graduations: this.counters.graduations,
       surges: this.counters.surges,
       byLaunchpad: this.counters.byLaunchpad,
+      flagOutcomes: Object.fromEntries(Object.entries(this.flagOutcomes).sort((a, b) => b[1].n - a[1].n).map(([k, o]) => [k, { ...o, pctDumped: o.n ? Math.round((100 * o.dumped) / o.n) : null }])),
       outcomes: Object.fromEntries(Object.entries(this.outcomes).map(([k, o]) => [k, { ...o, pctDumped: o.n ? Math.round((100 * o.dumped) / o.n) : null }])),
       pctMintAuthority: pct("mint_authority"),
       pctFreezeAuthority: pct("freeze_authority"),
